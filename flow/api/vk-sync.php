@@ -33,7 +33,11 @@ function vk_sync_step(int $uid, callable $rpc): bool {
     try {
         $state=$rpc($uid,'status',[]);
         if (empty($state['connected'])) $state=$rpc($uid,'app-login-status',[]);
-        if (empty($state['connected'])) throw new RuntimeException('VK требует подтверждения. Открой подключение VK в FLOW.');
+        if (empty($state['connected'])) {
+            $login=$state['login']??[];
+            if (!empty($state['authenticated']) || in_array($login['stage']??'', ['checking','starting','submitting'],true) || ($login['stage']??'')==='verification' && empty($login['reason'])) throw new RuntimeException('VK ещё загружает сохранённую сессию. Сервер повторит проверку.');
+            throw new RuntimeException('VK требует подтверждения. Открой подключение VK в FLOW.');
+        }
         $vkUser=(int)($state['profile']['id']??0);
         if (!$vkUser || isset($job['vk_user']) && $job['vk_user']!==$vkUser) throw new RuntimeException('Аккаунт VK изменился. Запусти синхронизацию заново.');
         $page=$rpc($uid,'list',['kind'=>'my','offset'=>$job['offset']]);
