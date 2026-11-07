@@ -11,7 +11,19 @@ return [
     'allowed_users' => [],
 
     // Сколько треков хранить в библиотеке одного пользователя.
-    'max_tracks' => 500,
+    'max_tracks' => 10000,
+
+    // VK через серверный браузер: не требует регистрации VK-приложения.
+    'vk_connector_url' => '', // https://vk-connector.example.com (или адрес в приватной сети)
+    'vk_connector_secret' => '', // тот же случайный ключ, что FLOW_CONNECTOR_SECRET в контейнере
+
+    // Необязательный альтернативный способ: приложение с разрешённым доступом к Audio API. Обычного VK ID недостаточно.
+    'vk_client_id' => '',
+    'vk_client_secret' => '',
+    // Полный HTTPS-адрес callback, также указанный в настройках приложения VK.
+    'vk_redirect_uri' => '', // https://example.com/flow/api/vk-callback.php
+    // Для HLS-треков: абсолютный путь к ffmpeg на сервере.
+    'ffmpeg_path' => '', // /usr/bin/ffmpeg
 
     // Для тестов: адрес Bot API. В проде не трогай.
     'api_base' => 'https://api.telegram.org',

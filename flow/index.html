@@ -1,79 +1,54 @@
 <!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<meta name="theme-color" content="#0e1016">
-<title>FLOW</title>
-<link rel="stylesheet" href="./style.css">
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-</head>
-<body>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b0b0f"><title>FLOW · Твой ритм</title>
+<link rel="stylesheet" href="./style.css"><script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head><body>
 <main>
-  <header>
-    <div class="logo">FLOW<i id="beat" data-beat="0"></i></div>
-    <span id="hello" class="chip"></span>
-  </header>
-
+<header class="app-header"><a class="logo" href="#stage" aria-label="FLOW — плеер">flow<span class="logo-period">.</span><i id="beat" data-beat="0"></i></a><div class="header-right"><span class="edition">MUSIC, IN MOTION</span><span id="hello" class="chip"></span></div></header>
+<section id="studio" data-view="stage" hidden>
+  <div class="page-heading"><p class="eyebrow">ТВОЯ МУЗЫКА. НОВОЕ ЗВУЧАНИЕ.</p><h1>В потоке.</h1><p>От первого бита до последнего перехода.</p></div>
   <section id="stage" class="stage">
-    <div class="now">
-      <small>СЕЙЧАС ИГРАЕТ</small>
-      <h1 id="nowTitle">Загрузка…</h1>
-      <p id="nowArtist"> </p>
-    </div>
-    <canvas id="viz" aria-hidden="true"></canvas>
-    <div class="bar"><span id="progress"></span></div>
-    <div class="meta-row">
-      <span><b id="bpm">—</b> BPM</span>
-      <span id="time">0:00</span>
-    </div>
-    <div class="up-next"><small>ДАЛЕЕ</small><span id="nextTitle">—</span></div>
+    <div class="artwork" aria-hidden="true"><div class="art-orbit"></div><div class="art-orbit second"></div><span class="art-label">FLOW<br>SESSIONS</span><span class="art-number">01 / ∞</span><canvas id="viz"></canvas></div>
+    <div class="now"><small id="playerState">ГОТОВ К СЕТУ</small><h2 id="nowTitle">Твой следующий сет</h2><p id="nowArtist">Добавь музыку, остальное — FLOW</p></div>
+    <div class="bar"><span id="progress"></span></div><div class="meta-row"><span><b id="bpm">—</b> BPM</span><span id="time">0:00</span></div>
+    <div class="up-next"><small>ДАЛЕЕ</small><span id="nextTitle">Выбери музыку для сета</span></div>
   </section>
-
-  <div class="seg" role="group" aria-label="Режим">
-    <button data-mode="mix" data-lock aria-pressed="true"><b>Автомикс</b><small>как AutoMix</small></button>
-    <button data-mode="mash" data-lock aria-pressed="false"><b>Мэшап</b><small>вокал + бит</small></button>
-  </div>
-  <label class="switch"><input type="checkbox" id="smart" data-lock checked><span></span>Умный порядок по темпу</label>
-
-  <button id="play" class="play">▶  Запустить сет</button>
-  <p id="status" class="status" role="status"></p>
-
-  <section class="lib">
-    <div class="lib-head">
-      <h2>Библиотека</h2>
-      <div><span id="count" class="dim"></span> <button id="selectAll" class="link" data-lock hidden>Выбрать все</button> <button id="refresh" class="icon" aria-label="Обновить">↻</button></div>
-    </div>
-    <div id="empty" class="empty" hidden>
-      <div class="disc"></div>
-      <p><b>Пришли боту музыку</b><br>Перешли треки из чатов или отправь файлами (mp3, m4a, wav, flac до 20 МБ) — и возвращайся сюда.</p>
-      <button id="toChat" class="ghost">Открыть чат с ботом</button>
-    </div>
-    <ul id="library"></ul>
-  </section>
-
-  <details class="lights">
-    <summary>💡 Светомузыка</summary>
-    <p class="dim">Лампы подключаются через Home Assistant: Сбер (интеграция SberDevices), Яндекс, Xiaomi, Hue и другие. Нужен адрес HA по https и долгоживущий токен (Профиль → Безопасность). Добавь в configuration.yaml:<br><code>http:<br>&nbsp;&nbsp;cors_allowed_origins:<br>&nbsp;&nbsp;&nbsp;&nbsp;- <span id="origin"></span></code></p>
-    <input id="haUrl" type="url" placeholder="https://xxxx.ui.nabu.casa" autocomplete="off" spellcheck="false">
-    <input id="haToken" type="password" placeholder="Токен Home Assistant" autocomplete="off">
-    <div class="row"><button id="findLamps" class="ghost">Найти лампы</button><button id="testLamps" class="ghost">Проверить</button></div>
-    <div id="lamps"></div>
-    <label class="switch"><input type="checkbox" id="lightOn" disabled><span></span>Свет в такт сету</label>
-    <select id="lightMode"><option value="bar">Мягко — смена на каждый такт</option><option value="beat">Жёстко — каждая доля</option></select>
-    <p id="lightStatus" class="dim" role="status"></p>
-  </details>
-
-  <footer class="dim">FLOW · сводит прямо на твоём телефоне</footer>
+  <div class="section-heading"><h2>Как звучит твой сет</h2><span class="dim">Два режима</span></div>
+  <div class="seg" role="group" aria-label="Режим"><button data-mode="mix" data-lock aria-pressed="true"><span class="mode-symbol" aria-hidden="true">∿</span><b>Автомикс</b><small>Плавно. В один ритм.</small></button><button data-mode="mash" data-lock aria-pressed="false"><span class="mode-symbol" aria-hidden="true">⋈</span><b>Мэшап</b><small>Вокал встречает бит.</small></button></div>
+  <p id="modeDescription" class="mode-description">FLOW подбирает переходы, совмещает темп и плавно сводит треки.</p>
+  <div id="mashPair" class="mash-pair" hidden><div><small>ВОКАЛ</small><b id="mashVocal">Выбери первый трек</b></div><span>＋</span><div><small>ИНСТРУМЕНТАЛ</small><b id="mashBeat">Выбери второй трек</b></div></div>
+  <label class="switch setting-row"><div><b>Умная очередь</b><small>Подобрать порядок по темпу</small></div><input type="checkbox" id="smart" data-lock checked><span></span></label>
+  <div class="queue-card"><div class="section-heading"><h2>В твоём сете</h2><a href="#music" class="text-link">Изменить ↗</a></div><p id="queueSummary" class="dim">Пока нет треков</p><ol id="queuePreview"></ol></div>
+</section>
+<section id="music" class="lib" data-view="music">
+  <div class="page-heading"><p class="eyebrow">ТВОЯ КОЛЛЕКЦИЯ</p><h1>Музыка.</h1><p>Любимые треки. Твой собственный микс.</p></div>
+  <div class="import-actions"><button id="importVk" class="source-card"><span class="source-icon vk-mark">VK</span><span><b>VK Музыка</b><small>Подключить библиотеку</small></span><span class="chevron">↗</span></button><button id="importFiles" class="source-card" data-lock><span class="source-icon">↓</span><span><b>С телефона</b><small>Добавить аудиофайлы</small></span><span class="chevron">＋</span></button><input id="audioFiles" type="file" accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg,.aac,.opus" multiple hidden></div>
+  <p id="importStatus" class="dim" role="status"></p>
+  <div class="lib-head"><h2>Библиотека</h2><div><button id="selectAll" class="link" data-lock hidden>Выбрать все</button><button id="refresh" class="icon" aria-label="Обновить">↻</button></div></div>
+  <label class="search-field"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Найти своё звучание" aria-label="Поиск в библиотеке" autocomplete="off"></label>
+  <div class="source-tabs" role="group" aria-label="Источник музыки"><button data-source="all" aria-pressed="true">Все</button><button data-source="vk" aria-pressed="false">VK</button><button data-source="telegram" aria-pressed="false">Telegram</button><button data-source="local" aria-pressed="false">На устройстве</button></div>
+  <div class="collection-meta"><span id="count" class="dim"></span><a href="#stage" class="text-link">Настроить сет ↗</a></div>
+  <div id="empty" class="empty" hidden><div class="empty-art" aria-hidden="true">♫</div><h2>Начни со своей музыки</h2><p>Подключи VK или добавь файлы.<br>FLOW соединит их в один поток.</p><button id="toChat" class="ghost">Открыть чат с ботом</button></div>
+  <ul id="library"></ul><p id="noResults" class="empty" hidden>Ничего не найдено. Попробуй другой запрос.</p>
+</section>
+<section id="djView" data-view="dj" hidden></section>
+<section id="lightsView" data-view="settings" hidden>
+  <div class="page-heading"><p class="eyebrow">ЗВУК СТАНОВИТСЯ СВЕТОМ</p><h1>Атмосфера.</h1><p>Твоя комната — часть музыки.</p></div>
+  <div class="light-art" aria-hidden="true"><span class="light-bloom"></span><div class="lamp-shape"></div><span class="light-art-caption">FEEL THE ROOM</span></div>
+  <div class="section-heading"><h2>Светомузыка</h2><span id="lightConnection" class="connection-badge">Не подключено</span></div>
+  <div class="empty"><h2>Сбер · без Home Assistant</h2><p>Прямое подключение ламп ещё в разработке.<br>Сначала завершаем подключение VK Музыки.</p></div><div hidden>
+  <label class="switch setting-row"><div><b>В ритме музыки</b><small>Синхронизировать выбранные лампы</small></div><input type="checkbox" id="lightOn" disabled><span></span></label>
+  <label class="field-label" for="lightMode">Характер света</label><select id="lightMode"><option value="bar">Плавный · каждый такт</option><option value="beat">Энергичный · каждая доля</option></select>
+  <div class="light-scenes" role="group" aria-label="Палитра света"><button data-palette="flow" aria-pressed="true"><i></i>Flow</button><button data-palette="sunset" aria-pressed="false"><i></i>Закат</button><button data-palette="ocean" aria-pressed="false"><i></i>Океан</button></div>
+  <label class="range-label" for="lightBrightness">Яркость <output id="brightnessValue">75%</output></label><input id="lightBrightness" type="range" min="10" max="100" value="75">
+  <label class="range-label" for="lightLatency">Опережение команды <output id="latencyValue">Авто</output></label><input id="lightLatency" type="range" min="0" max="1500" step="50" value="0"><p class="dim">Авто учитывает время ответа. Если свет запаздывает, задай опережение вручную.</p>
+  <details id="settings" class="lights"><summary>Подключить лампы <span>＋</span></summary><p class="dim">Укажи HTTPS-адрес Home Assistant и токен доступа. Данные сохраняются на этом устройстве.</p><label class="field-label" for="haUrl">Адрес Home Assistant</label><input id="haUrl" type="url" placeholder="https://home.example.com" autocomplete="off" spellcheck="false"><label class="field-label" for="haToken">Токен доступа</label><input id="haToken" type="password" placeholder="Вставь токен Home Assistant" autocomplete="off"><div class="row"><button id="findLamps" class="ghost">Найти лампы</button><button id="testLamps" class="ghost" disabled>Проверить свет</button></div><div id="lamps"></div><details class="connection-help"><summary>Помощь с подключением</summary><p class="dim">В Home Assistant создай токен в профиле и разреши адрес FLOW в configuration.yaml:</p><code>http:<br>&nbsp; cors_allowed_origins:<br>&nbsp;&nbsp; - <span id="origin"></span></code><p class="dim">Лампы Сбера должны уже отображаться в Home Assistant. Одной установки приложения «Салют» недостаточно.</p></details></details>
+  <p id="lightStatus" class="dim" role="status"></p></div>
+</section>
+<footer class="dim">Made for your flow.</footer>
 </main>
+<div class="player-dock"><a href="#stage" class="dock-track"><span class="dock-art" aria-hidden="true">∿</span><span><b id="dockTitle">Собери свой сет</b><small id="dockSubtitle">Автомикс · FLOW</small></span></a><button id="play" class="play" aria-label="Запустить сет">▶ Запустить сет</button><p id="status" class="status" role="status"></p></div>
+<nav class="bottom-nav" aria-label="Навигация"><a href="#music" aria-current="page"><span class="nav-icon">♫</span><span>Музыка</span></a><a href="#stage"><span class="nav-icon">∿</span><span>Студия</span></a><a href="#dj"><span class="nav-icon">◉</span><span>DJ</span></a><a href="#settings"><span class="nav-icon">☼</span><span>Свет</span></a></nav>
 <script type="module" src="./app.js"></script>
-<script>
-  // If the network stalls the scripts (e.g. Cloudflare throttled by the ISP), say so instead of spinning forever.
-  setTimeout(function () {
-    if (window.__flowBoot) return
-    document.getElementById('nowTitle').textContent = 'Не загрузилось'
-    document.getElementById('nowArtist').textContent = 'Сеть обрывает загрузку. Попробуй другой интернет или включи VPN, затем открой заново.'
-  }, 12000)
-</script>
-</body>
-</html>
+<script>setTimeout(function(){if(window.__flowBoot)return;document.getElementById('status').textContent='Не удалось загрузить FLOW. Проверь соединение и обнови страницу.'},12000)</script>
+</body></html>

@@ -1,3 +1,6 @@
+import { mountDj } from './dj.js'
+import { localLibrary } from './local-library.js'
+import { createVkLibrary } from './vk-library.js'
 import { AutoMix, smartOrder } from './engine.js'
 import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js'
 
@@ -6,18 +9,25 @@ const $ = (id) => document.getElementById(id)
 const tg = window.Telegram?.WebApp
 tg?.ready()
 tg?.expand()
-tg?.setHeaderColor?.('#0e1016')
-tg?.setBackgroundColor?.('#0e1016')
+tg?.setHeaderColor?.('#0b0b0f')
+tg?.setBackgroundColor?.('#0b0b0f')
 try { tg?.disableVerticalSwipes?.() } catch {}
 const initData = tg?.initData || ''
 const haptic = (kind = 'light') => { try { tg?.HapticFeedback?.impactOccurred(kind) } catch {} }
 
 const API = new URL('./api/app.php', location.href).href
-const AUDIO_CACHE = 'flow-audio-v1'
+let audioCache = null
+let deviceLibrary = null
+let libraryVisible = 100
+let libraryLoading = false
+let importingFiles = false
+let libraryRequest = 0
 const MAX_SECONDS = 12 * 60
 
 const state = {
   tracks: [],
+  source: 'all',
+  search: '',
   selected: new Set(),
   mode: 'mix',
   smart: true,
@@ -43,20 +53,65 @@ async function api(action, params = {}, init = {}) {
   return res
 }
 
-/** Track audio, cached on the device after the first download. */
+/** Only the selected mix tracks are decoded; VK audio is not saved for offline use. */
 async function trackBlob(track) {
+  if (track.source === 'local') {
+    const blob = await deviceLibrary?.blob(track.id)
+    if (!blob) throw new Error('Файл удалён с устройства. Добавь его снова.')
+    return blob
+  }
+  if (track.source === 'vk') return (await api('file', { id: track.id })).blob()
   const key = new URL(API)
   key.searchParams.set('a', 'file')
   key.searchParams.set('id', track.id)
   let cache = null
-  try { cache = await caches.open(AUDIO_CACHE) } catch {}
-  const hit = cache && (await cache.match(key.href))
+  try { if (audioCache) cache = await caches.open(audioCache) } catch {}
+  let hit = null
+  try { hit = cache && await cache.match(key.href) } catch {}
   if (hit) return hit.blob()
   const res = await api('file', { id: track.id })
   const blob = await res.blob()
   if (cache) { try { await cache.put(key.href, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg' } })) } catch {} }
   return blob
 }
+
+// Ordinary listening does not start analysis, stem models or an offline download.
+const listenPanel = document.createElement('section')
+listenPanel.className = 'listen-panel'; listenPanel.hidden = true
+const listenTitle = document.createElement('p'), listenAudio = document.createElement('audio')
+listenAudio.controls = true; listenAudio.preload = 'none'
+listenPanel.append(listenTitle, listenAudio); $('library').before(listenPanel)
+const libraryMore = document.createElement('button')
+libraryMore.className = 'ghost'; libraryMore.id = 'libraryMore'; libraryMore.textContent = 'Показать ещё 100'
+$('library').after(libraryMore)
+libraryMore.onclick = () => { libraryVisible += 100; renderLibrary() }
+let listenObjectUrl = null, listenGeneration = 0
+function stopListening() {
+  listenGeneration++; listenAudio.pause(); listenAudio.removeAttribute('src'); listenAudio.load()
+  if (listenObjectUrl) URL.revokeObjectURL(listenObjectUrl)
+  listenObjectUrl = null
+}
+async function listenTrack(track) {
+  if (state.busy) return
+  if (state.playing) stopSet()
+  dj.stop()
+  stopListening(); const generation = listenGeneration
+  listenPanel.hidden = false; listenTitle.textContent = `${track.artist} — ${track.title}`
+  try {
+    if (track.source === 'local') {
+      const blob = await deviceLibrary.blob(track.id)
+      if (generation !== listenGeneration) return
+      listenObjectUrl = URL.createObjectURL(blob); listenAudio.src = listenObjectUrl
+    } else {
+      await api('media-session', {}, { method: 'POST' })
+      if (generation !== listenGeneration) return
+      const url = new URL(API); url.searchParams.set('a', 'file'); url.searchParams.set('id', track.id)
+      listenAudio.src = url.href
+    }
+    await listenAudio.play().catch(() => status('Нажми ▶ в плеере для воспроизведения'))
+  } catch (error) { if (generation === listenGeneration) status(error.message) }
+}
+listenAudio.onerror = () => status('Не удалось воспроизвести трек. Выбери его ещё раз для обновления ссылки.')
 
 // ---------- Audio graph ----------
 
@@ -177,13 +232,17 @@ function onEvent(e) {
   renderLibrary()
 }
 
+const dj = mountDj({ root: $('djView'), context: audio, load: decodeTrack, tracks: () => state.tracks, beforePlay: () => { stopListening(); if (state.playing) stopSet() }, message: text => status(text) })
+
 // ---------- Set control ----------
 
 async function startSet() {
-  if (state.busy) return
+  if (state.busy || importingFiles || libraryLoading || vkLibrary.busy) return
   const chosen = state.tracks.filter((t) => state.selected.has(t.id))
   const list = chosen.length ? chosen : state.tracks
-  if (list.length < 1) { status('Сначала пришли боту хотя бы пару треков'); return }
+  if (list.length < 1) { status('Добавь музыку из VK, с телефона или через бота'); return }
+  stopListening()
+  dj.stop()
   haptic('medium')
   state.busy = true
   render()
@@ -191,19 +250,10 @@ async function startSet() {
     await audio().resume()
     let queue = list.slice()
     if (state.smart && queue.length > 2) {
-      // Smart order needs every tempo: analyse what we haven't seen yet.
-      let i = 0
-      for (const t of queue) {
-        i++
-        const grid = cachedGrid(t.id)
-        if (grid) { t.bpm = grid.bpm; continue }
-        status(`Слушаю треки, чтобы выстроить сет · ${i}/${queue.length}`)
-        const { grid: g } = await decodeTrack(t)
-        t.bpm = g.bpm
-      }
-      const withBeat = queue.filter((t) => t.bpm)
-      const free = queue.filter((t) => !t.bpm)
-      queue = [...smartOrder(withBeat.sort((a, b) => a.bpm - b.bpm)), ...free]
+      // Never analyse/download a whole library before playback. The engine loads
+      // the current and next deck on demand; reorder only already-known tempos.
+      for (const t of queue) t.bpm = cachedGrid(t.id)?.bpm || t.bpm || 0
+      if (queue.every(t => t.bpm)) queue = smartOrder(queue)
     }
     state.queue = queue
     state.playing = true
@@ -298,9 +348,23 @@ function renderStage() {
   const now = state.queue[state.nowIndex]
   const next = state.queue[state.nextIndex]
   $('nowTitle').textContent = now ? now.title : state.tracks.length ? 'Готов к сету' : 'Библиотека пуста'
-  $('nowArtist').textContent = now ? now.artist || ' ' : state.tracks.length ? `${state.tracks.length} ${plural(state.tracks.length, 'трек', 'трека', 'треков')} в библиотеке` : 'Пришли треки боту в чат'
+  $('nowArtist').textContent = now ? now.artist || ' ' : state.tracks.length ? `${state.tracks.length} ${plural(state.tracks.length, 'трек', 'трека', 'треков')} в библиотеке` : 'Добавь музыку и собери свой первый сет'
   $('nextTitle').textContent = next ? label(next) : '—'
   $('stage').classList.toggle('live', state.playing)
+  $('playerState').textContent = state.playing ? 'СЕЙЧАС ИГРАЕТ' : 'ТВОЙ СЛЕДУЮЩИЙ СЕТ'
+  $('dockTitle').textContent = now ? now.title : state.selected.size ? `Выбрано треков: ${state.selected.size}` : state.tracks.length ? 'Готов к запуску' : 'Собери свой сет'
+  $('dockSubtitle').textContent = now ? now.artist || 'FLOW' : state.mode === 'mash' ? 'Мэшап · вокал + инструментал' : 'Автомикс · плавные переходы'
+  $('mashPair').hidden = state.mode !== 'mash'
+  $('modeDescription').textContent = state.mode === 'mash' ? 'На переходах вокал одного трека звучит поверх инструментала следующего. Подготовка на телефоне может занять время.' : 'FLOW подбирает переходы, совмещает темп и плавно сводит треки.'
+  const chosen = state.tracks.filter(t => state.selected.has(t.id))
+  const queue = state.playing ? state.queue : chosen.length ? chosen : state.tracks
+  $('mashVocal').textContent = queue[0]?.title || 'Выбери первый трек'
+  $('mashBeat').textContent = queue[1]?.title || 'Добавь второй трек'
+  $('queueSummary').textContent = queue.length ? `${queue.length} ${plural(queue.length, 'трек', 'трека', 'треков')} · ${fmt(queue.reduce((sum, t) => sum + (t.duration || 0), 0))}` : 'Добавь музыку в библиотеку'
+  $('queuePreview').replaceChildren(...queue.slice(0, 5).map((track, index) => {
+    const row = document.createElement('li'), number = document.createElement('span'), title = document.createElement('b')
+    number.textContent = String(index + 1).padStart(2, '0'); title.textContent = label(track); row.append(number, title); return row
+  }))
   if (!state.playing) {
     $('bpm').textContent = '—'
     $('progress').style.width = '0%'
@@ -313,47 +377,70 @@ function render() {
   renderLibrary()
   const play = $('play')
   play.textContent = state.busy ? 'Готовлю сет…' : state.playing ? '■  Стоп' : '▶  Запустить сет'
+  play.setAttribute('aria-label', state.playing ? 'Остановить сет' : 'Запустить сет')
   play.classList.toggle('stop', state.playing)
-  play.disabled = state.busy
+  play.disabled = state.busy || importingFiles || libraryLoading || vkLibrary.busy || (!state.playing && !state.tracks.length)
   for (const b of document.querySelectorAll('[data-mode]')) b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode))
   $('smart').checked = state.smart
-  for (const el of document.querySelectorAll('[data-lock]')) el.disabled = state.playing || state.busy
+  $('refresh').disabled = state.playing || state.busy || libraryLoading || importingFiles || vkLibrary.busy
+  for (const button of document.querySelectorAll('[data-source]')) button.setAttribute('aria-pressed', String(button.dataset.source === state.source))
+  for (const el of document.querySelectorAll('[data-lock]')) el.disabled = state.playing || state.busy || importingFiles || vkLibrary.busy
 }
 
 function renderLibrary() {
+  dj.refresh()
   const list = $('library')
   const n = state.tracks.length
   $('count').textContent = n ? `${state.selected.size || n} из ${n} в сете` : ''
   $('empty').hidden = n > 0
   $('selectAll').hidden = n < 2
   $('selectAll').textContent = state.selected.size && state.selected.size === n ? 'Снять все' : 'Выбрать все'
-  list.replaceChildren(...state.tracks.map((t) => {
+  const search = state.search.toLocaleLowerCase('ru')
+  const visible = state.tracks.filter((t) => (state.source === 'all' || (t.source || 'telegram') === state.source) && `${t.title} ${t.artist}`.toLocaleLowerCase('ru').includes(search))
+  $('noResults').hidden = !n || visible.length > 0
+  libraryMore.hidden = visible.length <= libraryVisible
+  list.replaceChildren(...visible.slice(0, libraryVisible).map((t) => {
     const li = document.createElement('li')
     const qi = state.queue.indexOf(t)
     li.className = 'track' + (state.selected.has(t.id) ? ' on' : '') + (state.playing && qi === state.nowIndex ? ' now' : '') + (state.playing && qi === state.nextIndex ? ' next' : '')
     const bpm = t.bpm || cachedGrid(t.id)?.bpm
-    li.innerHTML = `<span class="tick" aria-hidden="true"></span><div class="meta"><b></b><small></small></div><span class="bpm"></span><button class="del" aria-label="Удалить">✕</button>`
+    li.innerHTML = `<button class="track-select"><span class="tick" aria-hidden="true"></span><span class="meta"><b></b><small></small></span><span class="bpm"></span></button><button class="listen" aria-label="Слушать трек">▶</button><button class="del" aria-label="Удалить">✕</button>`
+    li.querySelector('.listen').onclick = () => listenTrack(t)
+    const select = li.querySelector('.track-select')
+    select.disabled = state.playing || state.busy
+    select.setAttribute('aria-pressed', String(state.selected.has(t.id)))
     li.querySelector('b').textContent = t.title
-    li.querySelector('small').textContent = [t.artist, t.duration ? fmt(t.duration) : ''].filter(Boolean).join(' · ')
+    li.querySelector('small').textContent = [t.artist, t.duration ? fmt(t.duration) : '', t.source === 'vk' ? 'VK' : t.source === 'local' ? 'На телефоне' : 'Telegram'].filter(Boolean).join(' · ')
     li.querySelector('.bpm').textContent = bpm ? Math.round(bpm) + ' BPM' : ''
-    li.onclick = (ev) => {
-      if (ev.target.closest('.del') || state.playing) return
+    select.onclick = () => {
+      if (state.playing || state.busy) return
       haptic('light')
       state.selected.has(t.id) ? state.selected.delete(t.id) : state.selected.add(t.id)
       renderLibrary()
+      renderStage()
     }
     const del = li.querySelector('.del')
-    del.disabled = state.playing
+    del.disabled = state.playing || state.busy
+    del.setAttribute('aria-label', 'Удалить «' + t.title + '»')
     del.onclick = () => removeTrack(t)
     return li
   }))
 }
 
 async function removeTrack(t) {
+  if (state.playing || state.busy) return
   const ok = await new Promise((resolve) => (tg?.showConfirm ? tg.showConfirm(`Удалить «${t.title}» из библиотеки?`, resolve) : resolve(confirm('Удалить трек?'))))
-  if (!ok) return
+  if (!ok || state.playing || state.busy) return
   try {
-    await api('delete', { id: t.id }, { method: 'POST' })
+    if (t.source === 'local') await deviceLibrary.remove(t.id)
+    else await api('delete', { id: t.id }, { method: 'POST' })
+    try {
+      if (audioCache) {
+        const key = new URL(API); key.searchParams.set('a', 'file'); key.searchParams.set('id', t.id)
+        await (await caches.open(audioCache)).delete(key.href)
+      }
+      localStorage.removeItem(gridKey(t.id))
+    } catch {}
     state.tracks = state.tracks.filter((x) => x.id !== t.id)
     state.selected.delete(t.id)
     render()
@@ -361,21 +448,93 @@ async function removeTrack(t) {
 }
 
 async function loadLibrary() {
+  if (libraryLoading || state.playing || state.busy || importingFiles || vkLibrary.busy) return
+  libraryLoading = true
+  const ticket = ++libraryRequest
+  render()
   try {
-    const data = await (await api('list')).json()
-    state.tracks = data.tracks.map((t) => ({ ...t, bpm: cachedGrid(t.id)?.bpm || 0 }))
+    const data = initData ? await (await api('list')).json() : { tracks: [], user: { id: 'guest' } }
+    if (ticket !== libraryRequest || state.playing || state.busy) return
+    deviceLibrary = localLibrary(String(data.user.id))
+    audioCache = 'flow-audio-v2-' + data.user.id
+    let local = []
+    try { local = await deviceLibrary.list() } catch (e) { $('importStatus').textContent = e.message }
+    // Preserve object identity so queue highlighting stays stable.
+    const previous = new Map(state.tracks.map((t) => [t.id, t]))
+    state.tracks = [...data.tracks, ...local].map((t) => Object.assign(previous.get(t.id) || {}, t, { bpm: cachedGrid(t.id)?.bpm || 0 }))
     for (const id of [...state.selected]) if (!state.tracks.some((t) => t.id === id)) state.selected.delete(id)
     if (data.user?.name) $('hello').textContent = data.user.name
-    status(state.tracks.length ? 'Выбери треки или жми «Запустить сет» — сведу всю библиотеку' : '')
-  } catch (error) {
-    status(error.message)
-  }
-  render()
+    status(state.tracks.length ? 'Выбери треки для сета или запусти всю библиотеку' : initData ? '' : 'Файлы с телефона доступны здесь. Для VK и библиотеки бота открой FLOW из Telegram.')
+  } catch (error) { status(error.message) }
+  finally { libraryLoading = false; render() }
 }
+
+const vkLibrary = createVkLibrary({
+  api,
+  onChange: render,
+  canImport: () => !state.playing && !state.busy && !importingFiles && !libraryLoading,
+  existingIds: () => new Set(state.tracks.map((t) => t.id)),
+  onAdded: async (track) => {
+    if (!state.tracks.some((t) => t.id === track.id)) state.tracks.push(track)
+    state.selected.add(track.id)
+    render()
+  },
+  onLogout: async () => {
+    state.tracks = state.tracks.filter((t) => t.source !== 'vk')
+    for (const id of [...state.selected]) if (id.startsWith('vk:')) state.selected.delete(id)
+    try { if (audioCache) await caches.delete(audioCache) } catch {}
+    render()
+  }
+})
+$('importVk').onclick = () => {
+  if (!initData) { status('Открой FLOW из Telegram, чтобы подключить VK'); return }
+  vkLibrary.open()
+}
+$('importFiles').onclick = () => {
+  if (!deviceLibrary) { status('Сначала дождись загрузки библиотеки'); return }
+  $('audioFiles').click()
+}
+$('audioFiles').onchange = async () => {
+  const files = [...$('audioFiles').files]
+  $('audioFiles').value = ''
+  if (!deviceLibrary || state.playing || state.busy || importingFiles || vkLibrary.busy) return
+  importingFiles = true; render()
+  let added = 0
+  const errors = []
+  for (const file of files) {
+    $('importStatus').textContent = `Добавляю ${file.name}…`
+    try {
+      const track = await deviceLibrary.add(file)
+      if (!state.tracks.some((t) => t.id === track.id)) { state.tracks.push(track); added++ }
+      state.selected.add(track.id)
+    } catch (e) { errors.push(`${file.name}: ${e.message}`) }
+  }
+  importingFiles = false; render()
+  $('importStatus').textContent = `Добавлено: ${added}.${added ? ' Файлы сохранены на этом устройстве.' : !errors.length && files.length ? ' Эти файлы уже есть в библиотеке.' : ''}${errors.length ? ' ' + errors.join(' · ') : ''}`
+}
+for (const button of document.querySelectorAll('[data-source]')) button.onclick = () => { state.source = button.dataset.source; render() }
+$('search').oninput = () => { libraryVisible = 100; state.search = $('search').value.trim(); renderLibrary() }
+$('settings').addEventListener('toggle', () => { if ($('settings').open) $('settings').scrollIntoView({ block: 'start' }) })
+function showView(name) {
+  if (!['music', 'stage', 'settings', 'dj'].includes(name)) name = 'music'
+  for (const section of document.querySelectorAll('[data-view]')) section.hidden = section.dataset.view !== name
+  for (const link of document.querySelectorAll('.bottom-nav a')) {
+    if (link.hash === '#' + name) link.setAttribute('aria-current', 'page')
+    else link.removeAttribute('aria-current')
+  }
+  window.scrollTo(0, 0)
+}
+document.addEventListener('click', event => {
+  const link = event.target.closest('a[href^="#"]')
+  if (!link || !['#stage', '#music', '#settings', '#dj'].includes(link.hash)) return
+  event.preventDefault(); history.replaceState(null, '', link.hash); showView(link.hash.slice(1))
+})
+window.addEventListener('hashchange', () => showView(location.hash.slice(1)))
 
 // ---------- Light settings UI ----------
 
-let settings = loadSettings()
+// Hardware output remains off until the direct Sber connection is implemented.
+let settings = { ...loadSettings(), on: false }
 function renderLights(lamps) {
   $('haUrl').value = settings.url
   $('haToken').value = settings.token
@@ -429,16 +588,12 @@ $('selectAll').onclick = () => {
   if (state.selected.size === state.tracks.length) state.selected.clear()
   else state.tracks.forEach((t) => state.selected.add(t.id))
   renderLibrary()
+  renderStage()
 }
 $('refresh').onclick = () => { haptic(); loadLibrary() }
 $('toChat').onclick = () => (tg ? tg.close() : null)
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !state.playing) loadLibrary() })
 
 renderLights()
-if (!initData) {
-  $('stage').classList.add('offline')
-  status('Открой FLOW через кнопку в Telegram-боте — там твоя библиотека.')
-  render()
-} else {
-  loadLibrary()
-}
+showView(location.hash.slice(1))
+loadLibrary()

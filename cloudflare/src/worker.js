@@ -1,3 +1,6 @@
+import { serveAssets } from './assets.js'
+import { connectorFile } from './vk-connector.js'
+import { vkAction, vkCallback, vkFile } from './vk.js'
 // FLOW on Cloudflare Workers: Telegram bot webhook, mini app API and the mini
 // app itself (static assets) in one Worker. Library lives in Workers KV.
 //
@@ -17,6 +20,7 @@ export default {
     const url = new URL(request.url)
     const path = url.pathname
     try {
+      if (path === '/api/vk-callback.php') return await vkCallback(env, url, (uid) => allowed(env, uid))
       if (path === '/api/bot.php' || path === '/api/bot') return await webhook(request, env, ctx)
       if (path === '/api/app.php' || path === '/api/app') return await appApi(request, env, url)
       if (path === '/api/setup.php' || path === '/api/setup') return await setup(env, url)
@@ -113,7 +117,7 @@ async function listTracks(env, uid) {
 
 async function getTrack(env, uid, id) {
   const { value, metadata } = await env.LIB.getWithMetadata(trackKey(uid, id))
-  return value === null ? null : metadata
+  return value === null ? null : metadata?.source === 'vk' ? JSON.parse(value) : metadata
 }
 
 // ---------------------------------------------------------------- bot
@@ -288,15 +292,33 @@ export async function verifyInitData(env, initData, maxAge = 86400) {
 }
 
 async function appApi(request, env, url) {
-  const user = await verifyInitData(env, request.headers.get('X-Telegram-Init-Data') || '')
+  const init = request.headers.get('X-Telegram-Init-Data') || ''
+  let user = init ? await verifyInitData(env, init) : null
+  if (!init && url.searchParams.get('a') === 'file' && ['GET', 'HEAD'].includes(request.method)) {
+    const cookie = (request.headers.get('Cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith('flow_media='))?.slice(11) || ''
+    const m = /^(\d{1,20})\.(\d{10})\.([a-f0-9]{64})$/.exec(cookie)
+    if (m && Number(m[2]) >= Date.now()/1000 && same(hex(await hmac(enc.encode(token(env)), `flow-media|${m[1]}.${m[2]}`)), m[3])) user = { id: Number(m[1]) }
+  }
   if (!user) return json(401, { error: 'Открой FLOW через кнопку в боте' })
   const uid = Number(user.id)
   if (!allowed(env, uid)) return json(403, { error: 'Это личный бот' })
   const action = url.searchParams.get('a')
   const id = url.searchParams.get('id') || ''
 
+  if (action === 'media-session') {
+    if (request.method !== 'POST') return json(405, { error: 'POST only' })
+    const value = `${uid}.${Math.floor(Date.now()/1000)+3600}`
+    const signature = hex(await hmac(enc.encode(token(env)), 'flow-media|' + value))
+    return json(200, { ok: true }, { 'Set-Cookie': `flow_media=${value}.${signature}; Max-Age=3600; Path=${url.pathname}; Secure; HttpOnly; SameSite=Strict` })
+  }
+  if (action?.startsWith('vk-')) return vkAction(request, env, uid, action, url, {
+    list: () => listTracks(env, uid),
+    remove: (id) => env.LIB.delete(trackKey(uid, id)),
+    put: (track) => env.LIB.put(trackKey(uid, track.id), JSON.stringify(track), { metadata: { id: track.id, title: track.title.slice(0, 100), artist: track.artist.slice(0, 80), duration: track.duration, size: 0, source: 'vk', added: track.added } })
+  })
+
   if (action === 'list') {
-    const tracks = (await listTracks(env, uid)).map(({ id, title, artist, duration, size }) => ({ id, title, artist, duration, size }))
+    const tracks = (await listTracks(env, uid)).map(({ id, title, artist, duration, size, source = 'telegram' }) => ({ id, title, artist, duration, size, source }))
     return json(200, { tracks, user: { id: uid, name: user.first_name || '' } })
   }
 
@@ -309,6 +331,8 @@ async function appApi(request, env, url) {
   if (action === 'file') {
     const track = await getTrack(env, uid, id)
     if (!track) return json(404, { error: 'Трека нет в библиотеке' })
+    if (track.vk_provider === 'browser') return connectorFile(env, uid, track, request.headers.get('Range') || '')
+    if (track.source === 'vk') return vkFile(env, uid, track)
     const file = await tg(env, 'getFile', { file_id: track.file_id })
     const filePath = file.result?.file_path
     if (!filePath) return json(410, { error: 'Telegram не отдал файл. Пришли трек боту ещё раз.' })
@@ -388,32 +412,8 @@ function isolate(response, extra = {}) {
 }
 
 async function assets(request, env, url) {
-  const res = await env.ASSETS.fetch(request)
-  if (res.status !== 404) {
-    const extra = /\.(onnx|wasm)$/.test(url.pathname) ? { 'Cache-Control': 'public, max-age=2592000' } : {}
-    if (url.pathname.endsWith('.wasm')) extra['Content-Type'] = 'application/wasm'
-    return isolate(res, extra)
-  }
-  // Big file split into <path>.part0, .part1 … at deploy time: stream them back to back.
-  const parts = []
-  for (let i = 0; i < 20; i++) {
-    const part = await env.ASSETS.fetch(new URL(`${url.pathname}.part${i}`, url.origin).href)
-    if (part.status !== 200) { part.body?.cancel(); break }
-    parts.push(part)
-  }
-  if (!parts.length) return res
-  const lengths = parts.map((p) => Number(p.headers.get('Content-Length') || 0))
-  const known = lengths.every((n) => n > 0)
-  const total = lengths.reduce((a, b) => a + b, 0)
-  const { readable, writable } = known && typeof FixedLengthStream === 'function' ? new FixedLengthStream(total) : new TransformStream()
-  ;(async () => {
-    for (const p of parts) await p.body.pipeTo(writable, { preventClose: true })
-    await writable.close()
-  })().catch((e) => console.error('stitch', e))
-  const type = url.pathname.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream'
-  const headers = { 'Content-Type': type }
-  if (known) headers['Content-Length'] = String(total)
-  return isolate(new Response(readable, { headers }), {
-    'Cache-Control': 'public, max-age=2592000'
-  })
+  const res = await serveAssets(request, env, url)
+  const extra = {}
+  if (res.ok && url.pathname.endsWith('.wasm')) extra['Content-Type'] = 'application/wasm'
+  return isolate(res, extra)
 }

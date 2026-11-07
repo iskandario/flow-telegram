@@ -53,7 +53,7 @@ function http_post_json(string $url, array $params, int $timeout = 25): array
     ]);
     $body = curl_exec($ch);
     $error = curl_error($ch);
-    curl_close($ch);
+    unset($ch);
     if ($body === false) throw new RuntimeException('Telegram недоступен: ' . $error);
     $data = json_decode((string) $body, true);
     return is_array($data) ? $data : ['ok' => false, 'description' => 'Bad response'];
@@ -102,8 +102,16 @@ function read_library(int $userId): array
 {
     $file = user_file($userId);
     if (!is_file($file)) return ['tracks' => []];
-    $lib = json_decode((string) file_get_contents($file), true);
-    return is_array($lib) && isset($lib['tracks']) ? $lib : ['tracks' => []];
+    $fh = fopen($file, 'r');
+    if (!$fh) throw new RuntimeException('Хранилище недоступно');
+    try {
+        flock($fh, LOCK_SH);
+        $lib = json_decode((string) stream_get_contents($fh), true);
+        return is_array($lib) && isset($lib['tracks']) ? $lib : ['tracks' => []];
+    } finally {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+    }
 }
 
 function user_allowed(int $userId): bool

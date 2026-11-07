@@ -9,7 +9,7 @@ Options -Indexes
     Deny from all
   </IfModule>
 </FilesMatch>
-<FilesMatch "^(bot|app|setup)\.php$">
+<FilesMatch "^(bot|app|setup|vk-callback|vk-state)\.php$">
   <IfModule mod_authz_core.c>
     Require all granted
   </IfModule>

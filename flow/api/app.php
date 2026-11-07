@@ -1,12 +1,17 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/lib.php';
+require __DIR__ . '/vk.php';
+require __DIR__ . '/vk-connector.php';
+require __DIR__ . '/vk-audio.php';
+require __DIR__ . '/media-session.php';
 
 // Mini app API. Every call carries Telegram initData, which proves who the
 // user is; nobody can read or play someone else's library.
 
 try {
-    $user = verify_init_data((string) ($_SERVER['HTTP_X_TELEGRAM_INIT_DATA'] ?? ''));
+    $init = (string) ($_SERVER['HTTP_X_TELEGRAM_INIT_DATA'] ?? '');
+    $user = $init !== '' ? verify_init_data($init) : (($_GET['a'] ?? '') === 'file' && in_array($_SERVER['REQUEST_METHOD'], ['GET', 'HEAD'], true) ? media_cookie_user() : null);
 } catch (Throwable $e) {
     json_out(500, ['error' => $e->getMessage()]);
     exit;
@@ -22,8 +27,16 @@ if (!user_allowed($uid)) {
 }
 
 $action = (string) ($_GET['a'] ?? '');
+if (str_starts_with($action, 'vk-')) {
+    if (vk_connector_configured()) vk_connector_api($uid, $action);
+    else vk_api($uid, $action);
+    exit;
+}
 try {
     switch ($action) {
+        case 'media-session':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') { json_out(405, ['error'=>'POST only']); break; }
+            media_cookie_issue($uid); json_out(200, ['ok'=>true]); break;
         case 'list':
             $tracks = array_map(fn ($t) => [
                 'id' => $t['id'],
@@ -31,6 +44,7 @@ try {
                 'artist' => $t['artist'],
                 'duration' => $t['duration'],
                 'size' => $t['size'],
+                'source' => $t['source'] ?? 'telegram',
             ], read_library($uid)['tracks']);
             json_out(200, ['tracks' => $tracks, 'user' => ['id' => $uid, 'name' => $user['first_name'] ?? '']]);
             break;
@@ -69,6 +83,8 @@ function stream_track(int $uid, string $id): void
         json_out(404, ['error' => 'Трека нет в библиотеке']);
         return;
     }
+    if (($track['vk_provider'] ?? '') === 'browser') { vk_connector_stream($uid, $track); return; }
+    if (($track['source'] ?? '') === 'vk') { vk_stream($uid, $track); return; }
     $file = tg('getFile', ['file_id' => $track['file_id']]);
     $path = $file['result']['file_path'] ?? '';
     if (!$path) {
@@ -100,6 +116,6 @@ function stream_track(int $uid, string $id): void
         },
     ]);
     $ok = curl_exec($ch);
-    curl_close($ch);
+    unset($ch);
     if (!$ok && !$headersSent) json_out(502, ['error' => 'Не удалось скачать трек из Telegram']);
 }
