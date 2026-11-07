@@ -9,3 +9,8 @@ cloudflare/node_modules/
 *.zip
 _to_delete/
 .DS_Store
+node_modules/
+work/
+vk-connector/.env
+vk-connector/state/
+state/

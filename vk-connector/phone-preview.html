@@ -1,0 +1,64 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FLOW · Проверка VK на iPhone</title><link rel="stylesheet" href="/style.css">
+<style>body{padding:24px 18px;max-width:540px;margin:auto}h1{font-size:28px}#tracks{padding:0;list-style:none}#tracks li{padding:16px 0;border-bottom:1px solid #30333e}audio{width:100%;margin-top:18px}.preview-note{line-height:1.5}#status{white-space:pre-wrap}</style>
+<h1>FLOW · VK на iPhone</h1>
+<p class="preview-note">Временная проверка входа и воспроизведения. Сервер теста работает на твоём Mac. Это ещё не постоянный мобильный сервис.</p>
+<p class="dim preview-note">Подтверждение в VK разрешает этому серверу войти в твой аккаунт. В локальном режиме с сохранением сессия хранится на Mac в зашифрованном виде. Кнопка «Отключить» удаляет её. Не пересылай личную ссылку.</p>
+<button class="play" id="connect">Моя музыка VK</button>
+<button class="ghost" id="disconnect">Отключить VK и удалить сессию</button>
+<ul id="tracks"></ul><audio id="audio" controls preload="none" hidden></audio><p id="status" role="status"></p>
+<script type="module">
+import { createVkLibrary } from '/vk-library.js'
+const secret = location.hash.slice(1) || sessionStorage.getItem('flow-preview-key') || ''
+history.replaceState(null, '', location.pathname)
+if (/^[a-f0-9]{64}$/.test(secret)) sessionStorage.setItem('flow-preview-key', secret)
+const status = (message) => { document.querySelector('#status').textContent = message }
+const tracks = new Map()
+async function api(action, params = {}, init = {}) {
+ // LAN previews use HTTP; randomUUID is restricted to secure contexts on iOS.
+ const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+ const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 90000)
+ let response
+ try { response = await fetch('/api/app.php?' + new URLSearchParams({ a: action, ...params }), { ...init, signal: init.signal || controller.signal, headers: { ...init.headers, 'X-Flow-Preview-Key': secret, 'X-Flow-Request-Id': requestId } }) }
+ catch { throw new Error('Нет ответа от адреса FLOW. Проверь соединение и нажми «Проверить состояние». Номер автоматически повторно не отправлялся.') }
+ finally { clearTimeout(timer) }
+ const isJson = (response.headers.get('content-type') || '').includes('application/json')
+ if (!response.ok) {
+  const data = isJson ? await response.json().catch(() => ({})) : {}
+  throw new Error(data.error || `Шлюз не передал запрос в FLOW (HTTP ${response.status}). Нажми «Проверить состояние».`)
+ }
+ if (action !== 'file' && action !== 'vk-browser-frame' && !isJson) throw new Error('Вместо FLOW ответила страница внешнего адреса. Обнови страницу и проверь состояние входа.')
+ return response
+}
+function clear() {
+ tracks.clear(); render()
+ const audio = document.querySelector('#audio'); audio.pause(); audio.removeAttribute('src'); audio.hidden = true
+}
+function render() {
+ document.querySelector('#tracks').replaceChildren(...[...tracks.values()].map(track => {
+  const row = document.createElement('li'), title = document.createElement('p'), button = document.createElement('button')
+  title.textContent = [track.artist, track.title].filter(Boolean).join(' — ')
+  button.className = 'ghost'; button.textContent = 'Слушать'
+  button.onclick = async () => {
+   button.disabled = true; status('Подключаю трек из VK…')
+   try {
+    // Authenticate with a header; the server issues an HttpOnly media-only cookie.
+    // The audio element requests bytes itself. No Blob, IndexedDB or audio prefetch.
+    await api('vk-status')
+    const audio = document.querySelector('#audio')
+    audio.src = '/api/app.php?' + new URLSearchParams({ a: 'file', id: track.id })
+    audio.hidden = false; audio.load()
+    status('Нажми ▶. Аудио выбранного трека поступит из VK через сервер FLOW.')
+   } catch (e) { status(e.message) }
+   finally { button.disabled = false }
+  }
+  row.append(title, button); return row
+ }))
+}
+const library = createVkLibrary({ api, onAdded: async track => { tracks.set(track.id, track); render() }, onLogout: clear, canImport: () => true, existingIds: () => new Set(tracks.keys()), onChange() {} })
+document.querySelector('#connect').onclick = () => library.open()
+document.querySelector('#disconnect').onclick = async () => { try { await api('vk-logout', {}, { method: 'POST' }); clear(); status('Сессия VK удалена с тестового сервера.') } catch (e) { status(e.message) } }
+document.querySelector('#audio').onplaying = () => status('Плеер начал воспроизведение. Проверь, что слышен выбранный трек.')
+document.querySelector('#audio').onerror = () => status('iPhone не смог воспроизвести полученное аудио.')
+if (!/^[a-f0-9]{64}$/.test(secret)) { document.querySelector('#connect').disabled = true; status('Открой полную личную ссылку теста из чата.') }
+</script></html>

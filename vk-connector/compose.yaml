@@ -1,0 +1,29 @@
+services:
+  vk-connector:
+    build:
+      context: ..
+      dockerfile: vk-connector/Dockerfile
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8788:8788"
+    environment:
+      FLOW_CONNECTOR_SECRET: ${FLOW_CONNECTOR_SECRET:?Set FLOW_CONNECTOR_SECRET in .env}
+      FLOW_MAX_BROWSERS: ${FLOW_MAX_BROWSERS:-2}
+    volumes:
+      - vk-sessions:/app/state
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=1g
+    shm_size: 512mb
+    mem_limit: 2g
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8788/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  vk-sessions:

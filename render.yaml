@@ -1,0 +1,20 @@
+# Personal free deployment: no paid disk/database and no automatic plan upgrade.
+services:
+  - type: web
+    name: flow-vk
+    runtime: docker
+    plan: free
+    dockerfilePath: ./vk-connector/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8788
+      - key: FLOW_MAX_BROWSERS
+        value: 1
+      - key: FLOW_CONNECTOR_SECRET
+        generateValue: true
+      - key: FLOW_STATE_URL
+        sync: false

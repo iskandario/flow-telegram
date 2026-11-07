@@ -1,0 +1,7 @@
+**
+!package.json
+!package-lock.json
+!vk-connector/
+vk-connector/*
+!vk-connector/*.mjs
+!vk-connector/Dockerfile
