@@ -285,10 +285,11 @@ try {
   await loginPage.waitForFunction(() => !document.querySelector('.vk-browser').open)
   assert.match(await loginPage.locator('[data-account]').textContent(), /VK test/)
   // Scan several pages, cancel during discovery, resume, and keep the initial DOM bounded.
-  let scanningOffsets = [], invalidCursor = false
+  let scanningOffsets = [], invalidCursor = false, failPageOnce = true
   await loginPage.route('**/api/app.php?a=vk-list&**', async route => {
     const offset = Number(new URL(route.request().url()).searchParams.get('offset'))
     scanningOffsets.push(offset)
+    if(offset===100 && failPageOnce){failPageOnce=false;return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Сервер FLOW временно не отвечает'})})}
     const items = Array.from({ length: Math.min(50, 250 - offset) }, (_, n) => ({ ...vk1, id: `vk:7_${offset + n + 10}`, title: `Scan ${offset + n}` }))
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items, count: 250, nextOffset: invalidCursor ? offset : offset + 50 < 250 ? offset + 50 : null }) })
   })
@@ -299,17 +300,18 @@ try {
   const stoppedCount = scanningOffsets.length
   await loginPage.waitForTimeout(500)
   assert.equal(scanningOffsets.length, stoppedCount, 'Stop prevents subsequent requests')
-  await loginPage.locator('[data-more]').click()
+  await loginPage.reload()
+  await loginPage.locator('#importVk').click()
   await loginPage.waitForFunction(() => document.querySelector('.vk-library [data-status]').textContent.includes('Найдено 250'))
   assert.equal(await loginPage.locator('[data-tracks] li').count(), 100, 'Complete metadata scan does not render the entire library')
-  assert.deepEqual(scanningOffsets, [0, 50, 100, 150, 200])
+  assert.deepEqual(scanningOffsets, [0, 50, 100, 100, 150, 200])
   await loginPage.locator('[data-more]').click()
   assert.equal(await loginPage.locator('[data-tracks] li').count(), 200)
-  assert.equal(scanningOffsets.length, 5, 'Showing already discovered tracks performs no API request')
+  assert.equal(scanningOffsets.length, 6, 'Showing already discovered tracks performs no API request')
   invalidCursor = true
   await loginPage.locator('[data-my]').click()
   await loginPage.waitForFunction(() => document.querySelector('.vk-library [data-status]').textContent.includes('не продвинул'))
-  assert.equal(scanningOffsets.length, 6, 'Non-advancing cursor cannot loop indefinitely')
+  assert.equal(scanningOffsets.length, 7, 'Non-advancing cursor cannot loop indefinitely')
   await remote.close()
   assert.deepEqual(errors, [], 'Remote login has no runtime errors')
   // A 1,156-track library must not trigger an audio download storm on opening or set startup.

@@ -241,6 +241,11 @@ export class Sessions {
     if (/\/challenge/.test(session.page.url())) throw new Error('Пройди проверку в окне VK и повтори')
     const state = await this.profile(uid, session)
     if (!state.connected) throw new Error('Войди в VK через окно подключения')
+    const cacheable = ['audio.get', 'audio.getPlaylists'].includes(method)
+    const cacheKey = JSON.stringify([state.profile?.id, method, params])
+    session.catalogCache ||= new Map()
+    const cached = session.catalogCache.get(cacheKey)
+    if (cacheable && cached && Date.now()-cached.at < 120000) return cached.response
     const result = await session.page.evaluate(async ({ method, params }) => {
       try {
         const response = await Promise.race([window.vkApi.api(method, { ...params, v: '5.204' }), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 25000))])
@@ -248,9 +253,14 @@ export class Sessions {
       } catch (e) { return { ok: false, code: Number(e?.error_code || e?.error?.error_code) || 0 } }
     }, { method, params })
     if (!result.ok) {
-      if ([5, 14, 17].includes(result.code)) { session.needsLogin = true; session.connected = false; session.musicVerified = false; throw new Error('VK просит подтвердить вход. Открой окно подключения.') }
+      if ([5, 14, 17].includes(result.code)) { session.needsLogin = true; session.connected = false; session.musicVerified = false; session.catalogCache?.clear(); throw new Error('VK просит подтвердить вход. Открой окно подключения.') }
       if ([6, 9, 29].includes(result.code)) throw new Error('VK временно ограничил запросы. Попробуй позже.')
       throw new Error('VK не ответил на запрос. Проверь окно подключения и повтори.')
+    }
+    if (cacheable && !result.response?.error) {
+      for(const [key,value] of session.catalogCache)if(Date.now()-value.at>=120000)session.catalogCache.delete(key)
+      while(session.catalogCache.size>=32)session.catalogCache.delete(session.catalogCache.keys().next().value)
+      session.catalogCache.set(cacheKey,{at:Date.now(),response:result.response})
     }
     return result.response
   }

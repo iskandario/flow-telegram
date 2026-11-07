@@ -1,7 +1,7 @@
-import { createVkBrowser } from './vk-browser.js?v=20261108-recovery1'
-import { createVkAppLogin } from './vk-app-login.js?v=20261108-recovery1'
+import { createVkBrowser } from './vk-browser.js?v=20261108-catalog2'
+import { createVkAppLogin } from './vk-app-login.js?v=20261108-catalog2'
 /** Mobile VK browser. The server owns authorization and resolves expiring streams. */
-export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds, onChange }) {
+export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds, onChange, scanScope = () => null }) {
   const dialog = document.createElement('dialog')
   dialog.className = 'vk-dialog vk-library'
   dialog.setAttribute('aria-labelledby', 'vkTitle')
@@ -24,6 +24,37 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
   const request = async (action, params, init) => (await api(action, params, init)).json()
   let tracks = [], playlists = [], selected = new Set(), query = { kind: 'my' }, nextOffset = null, playlistOffset = 0
   let generation = 0, busy = false, adding = false, connected = false, provider = null, scanController = null, visibleLimit = 100
+  let snapshotKey = null
+  function saveProgress() {
+    if (!snapshotKey || query.kind !== 'my') return
+    try { localStorage.setItem(snapshotKey, JSON.stringify({at:Date.now(),tracks,nextOffset})) } catch {}
+  }
+  function restoreProgress() {
+    if (!snapshotKey || query.kind !== 'my') return false
+    try {
+      const saved = JSON.parse(localStorage.getItem(snapshotKey))
+      if (!saved || Date.now()-saved.at>86400000 || !Array.isArray(saved.tracks) || saved.tracks.length>10000 || !(saved.nextOffset===null || Number.isSafeInteger(saved.nextOffset)&&saved.nextOffset>=0)) return false
+      tracks=saved.tracks; nextOffset=saved.nextOffset; visibleLimit=100; selected.clear();return tracks.length>0
+    } catch { return false }
+  }
+  const pause = (ms, signal) => new Promise(resolve => {
+    if(signal.aborted)return resolve()
+    const done=()=>{clearTimeout(timer);signal.removeEventListener('abort',done);resolve()}
+    const timer=setTimeout(done,ms);signal.addEventListener('abort',done,{once:true})
+  })
+  async function pageWithRetry(params, signal) {
+    for(let attempt=0;;attempt++) {
+      try { return await request('vk-list',params,{signal}) }
+      catch(error) {
+        const transient = [429,502,503,504].includes(error.status) || error instanceof TypeError || /не удалось дождаться|сервер.*(?:не отвечает|недоступ|не ответ)|VK не ответил|VK временно ограничил|fetch|network/i.test(error.message)
+        if(signal.aborted || !transient || attempt>=4)throw error
+        const delay=Math.min(30000,3000*2**attempt)
+        status(`Получено ${tracks.length} треков. Сервер занят: повтор через ${delay/1000} с (${attempt+1}/4). Продолжу с той же страницы.`)
+        await pause(delay,signal)
+        if(signal.aborted)throw error
+      }
+    }
+  }
   const browser = createVkBrowser({ api, onConnected: () => refresh(), onLoginStep: () => appLogin.open() })
   const appLogin = createVkAppLogin({ api, onConnected: () => refresh(), onBrowser: () => browser.open() })
   function lock() {
@@ -68,12 +99,13 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
     try {
       do {
         const offset = nextOffset ?? 0
-        const page = await request('vk-list', { ...query, offset }, { signal: controller.signal })
+        const page = await pageWithRetry({ ...query, offset }, controller.signal)
         if (ticket !== generation || controller.signal.aborted) return
         for (const t of page.items) map.set(t.id, t)
         tracks = [...map.values()]
         if (page.nextOffset !== null && (!Number.isSafeInteger(page.nextOffset) || page.nextOffset <= offset)) throw new Error('VK не продвинул загрузку списка. Показана только полученная часть.')
         nextOffset = page.nextOffset
+        saveProgress()
         status(nextOffset !== null && auto ? `Загружаю список: ${tracks.length} из ${page.count}. Аудиофайлы пока не скачиваются.` : tracks.length ? `Найдено ${tracks.length} из ${page.count} треков` : 'Здесь пока нет музыки')
         render()
         if (!auto || nextOffset === null) break
@@ -97,6 +129,9 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
       const result = await request('vk-status')
       if (ticket !== generation) return
       connected = result.connected
+      const scope=scanScope(), previousKey=snapshotKey
+      snapshotKey = connected && scope && result.profile?.id ? `flow.vk-scan.v1.${scope}.${result.profile.id}` : null
+      if(previousKey!==snapshotKey){tracks=[];selected.clear();nextOffset=null}
       provider = result.provider || 'oauth'
       $('[data-browser-window]').hidden = provider !== 'browser'
       $('[data-login-copy]').textContent = provider === 'browser' ? 'Введи номер и код подтверждения в FLOW. После входа сервер проверит доступ к твоей музыке.' : 'Подключи свой VK, чтобы выбирать треки и плейлисты прямо с телефона. Вход — на сайте VK.'
@@ -107,7 +142,11 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
       status(result.configured ? '' : 'Владелец FLOW ещё не настроил доступ к VK Музыке. Пока можно добавить файлы с телефона или через бота.', !result.configured)
       busy = false; lock()
       $('[data-connect]').disabled = !result.configured
-      if (connected) await load()
+      if (connected) {
+        const restored = query.kind === 'my' && restoreProgress()
+        if (restored && nextOffset === null) { render(); status(`Загружено ${tracks.length} треков. «Моя музыка» обновит список заново.`) }
+        else await load(restored || tracks.length > 0 && nextOffset !== null)
+      }
     } catch (e) { if (ticket === generation) { busy = false; lock(); status(e.message, true) } }
   }
   $('[data-close]').onclick = () => dialog.close()
@@ -132,6 +171,7 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
     busy = true; lock()
     try {
       await request('vk-logout', {}, { method: 'POST' })
+      try { if(snapshotKey)localStorage.removeItem(snapshotKey) } catch {}
       tracks = []; playlists = []; selected.clear(); query = { kind: 'my' }; nextOffset = null
       $('select').hidden = true; $('[data-more-playlists]').hidden = true
       await onLogout()

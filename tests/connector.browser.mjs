@@ -40,7 +40,7 @@ try {
   assert.ok(!(await readFile(sessions.path('42'))).includes(Buffer.from('signed')))
   assert.equal((await sessions.call('42', 'audio.get', {})).items[0].title, 'Track')
   await session.page.evaluate(() => { window.vkApi.api = async () => { throw { error_code: 5 } } })
-  await assert.rejects(() => sessions.call('42', 'audio.get', {}), /подтвердить вход/)
+  await assert.rejects(() => sessions.call('42', 'audio.get', {offset: 1}), /подтвердить вход/)
   assert.equal((await sessions.status('42')).connected, false, 'An expired VK API session cannot close the login window as signed in')
   assert.equal((await sessions.open('42')).connected, true, 'Reopening reloads the VK page before rechecking the session')
   assert.equal((await sessions.status('43')).connected, false)

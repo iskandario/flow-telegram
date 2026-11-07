@@ -30,7 +30,7 @@ export function matchScore(want, got) {
   return title + Math.min(shared, 3) + (want.duration && got.duration && Math.abs(want.duration - got.duration) <= 3 ? 2 : 0)
 }
 export async function list(call, query = {}) {
-  const offset = pageOffset(query.offset), count = 50
+  const offset = pageOffset(query.offset), count = query.kind === 'search' ? 50 : 200
   let response, extra = []
   if (query.kind === 'search') {
     const q = String(query.q || '').trim().slice(0, 200)

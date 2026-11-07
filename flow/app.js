@@ -1,8 +1,8 @@
-import { mountDj } from './dj.js?v=20261108-recovery1'
-import { localLibrary } from './local-library.js?v=20261108-recovery1'
-import { createVkLibrary } from './vk-library.js?v=20261108-recovery1'
-import { AutoMix, smartOrder } from './engine.js?v=20261108-recovery1'
-import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-recovery1'
+import { mountDj } from './dj.js?v=20261108-catalog2'
+import { localLibrary } from './local-library.js?v=20261108-catalog2'
+import { createVkLibrary } from './vk-library.js?v=20261108-catalog2'
+import { AutoMix, smartOrder } from './engine.js?v=20261108-catalog2'
+import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-catalog2'
 
 window.__flowBoot = true
 const $ = (id) => document.getElementById(id)
@@ -48,7 +48,7 @@ async function api(action, params = {}, init = {}) {
   if (!res.ok) {
     let message = 'Ошибка сервера ' + res.status
     try { message = (await res.json()).error || message } catch {}
-    throw new Error(message)
+    const error = new Error(message); error.status = res.status; throw error
   }
   return res
 }
@@ -153,7 +153,7 @@ function analyzeGrid(buffer) {
     for (let i = 0; i < n; i++) mono[i] += ch[i] / buffer.numberOfChannels
   }
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./analysis.js?v=20261108-recovery1', import.meta.url), { type: 'module' })
+    const worker = new Worker(new URL('./analysis.js?v=20261108-catalog2', import.meta.url), { type: 'module' })
     const done = (fn, v) => { worker.terminate(); fn(v) }
     worker.onmessage = ({ data }) => (data.error ? done(reject, new Error(data.error)) : done(resolve, data))
     worker.onerror = () => done(reject, new Error('Анализ темпа не запустился'))
@@ -203,7 +203,7 @@ function wavBlob(buffer) {
 }
 
 async function separate(clip, onProgress) {
-  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-recovery1')
+  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-catalog2')
   const result = await stems.separateTwoStem(wavBlob(clip), (p) => onProgress(p?.percent || 0))
   const decode = async (name) => ctx.decodeAudioData(await result.stems.find((s) => s.name === name).blob.arrayBuffer())
   const [vocals, instrumental] = await Promise.all([decode('Vocals'), decode('Instrumental')])
@@ -470,6 +470,7 @@ async function loadLibrary() {
 }
 
 const vkLibrary = createVkLibrary({
+  scanScope: () => audioCache,
   api,
   onChange: render,
   canImport: () => !state.playing && !state.busy && !importingFiles && !libraryLoading,
