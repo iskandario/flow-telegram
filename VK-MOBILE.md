@@ -265,3 +265,18 @@ nonce и записывает AES-GCM ciphertext. Ключ расшифровк�
 
 Ограничения бесплатного сервиса: https://render.com/docs/free . Это вариант для
 личного использования с холодным стартом и лимитом трафика, не SLA продакшена.
+
+## Deployment verification — 2026-11-08
+
+- REG.RU frontend/API: `https://it-crew.online/flow/`; existing bot `@flowaimusicbot` retains its webhook and menu URL.
+- Render connector: `https://flow-vk.onrender.com`, Free, one browser context. No paid disk or new paid subscription.
+- Real deployed checks: health HTTP 200; signed RPC opens VK in Chromium (~7.2 s in one warm-server measurement); status and logout succeed. This is not a playback latency benchmark.
+- REG.RU signed state write/read/delete round trip passed using disposable test ciphertext. Existing private Telegram configuration was preserved. Backup is outside the public web root.
+- Actual user's VK login and audio playback on the hosted deployment still need verification on their iPhone. Earlier authenticated playback evidence used the local preview; it must not be represented as evidence for the new Render IP.
+- Free-host sleep and resource limits remain; an always-on production SLA is not claimed.
+
+## Manual DJ mode
+
+Two independently loaded Web Audio decks, equal-power crossfader, low/mid/high EQ, cue and seek, ±16% tempo, four-beat loop and ±20 ms nudges. Sync matches BPM only; phase alignment is manual and pitch follows tempo. Selecting a deck downloads/decodes that selected track in memory; ordinary listening uses native audio requests. Switching to another playback mode releases the manual deck buffers. This is not persistent offline storage of the VK collection.
+
+WebKit and Chromium UI tests cover simultaneous playback, cue, loops, mode navigation and narrow viewports. Audio-clock tests cover tempo continuity and loop release. Waveform editing, pitch-preserving time stretch and separate headphone monitoring are not implemented.

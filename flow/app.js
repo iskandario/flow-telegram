@@ -1,8 +1,8 @@
-import { mountDj } from './dj.js?v=20261108-dj2'
-import { localLibrary } from './local-library.js?v=20261108-dj2'
-import { createVkLibrary } from './vk-library.js?v=20261108-dj2'
-import { AutoMix, smartOrder } from './engine.js?v=20261108-dj2'
-import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-dj2'
+import { mountDj } from './dj.js?v=20261108-dj3'
+import { localLibrary } from './local-library.js?v=20261108-dj3'
+import { createVkLibrary } from './vk-library.js?v=20261108-dj3'
+import { AutoMix, smartOrder } from './engine.js?v=20261108-dj3'
+import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-dj3'
 
 window.__flowBoot = true
 const $ = (id) => document.getElementById(id)
@@ -153,7 +153,7 @@ function analyzeGrid(buffer) {
     for (let i = 0; i < n; i++) mono[i] += ch[i] / buffer.numberOfChannels
   }
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./analysis.js?v=20261108-dj2', import.meta.url), { type: 'module' })
+    const worker = new Worker(new URL('./analysis.js?v=20261108-dj3', import.meta.url), { type: 'module' })
     const done = (fn, v) => { worker.terminate(); fn(v) }
     worker.onmessage = ({ data }) => (data.error ? done(reject, new Error(data.error)) : done(resolve, data))
     worker.onerror = () => done(reject, new Error('Анализ темпа не запустился'))
@@ -203,7 +203,7 @@ function wavBlob(buffer) {
 }
 
 async function separate(clip, onProgress) {
-  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-dj2')
+  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-dj3')
   const result = await stems.separateTwoStem(wavBlob(clip), (p) => onProgress(p?.percent || 0))
   const decode = async (name) => ctx.decodeAudioData(await result.stems.find((s) => s.name === name).blob.arrayBuffer())
   const [vocals, instrumental] = await Promise.all([decode('Vocals'), decode('Instrumental')])
@@ -517,6 +517,7 @@ $('search').oninput = () => { libraryVisible = 100; state.search = $('search').v
 $('settings').addEventListener('toggle', () => { if ($('settings').open) $('settings').scrollIntoView({ block: 'start' }) })
 function showView(name) {
   if (!['music', 'stage', 'settings', 'dj'].includes(name)) name = 'music'
+  document.body.dataset.activeView = name
   for (const section of document.querySelectorAll('[data-view]')) section.hidden = section.dataset.view !== name
   for (const link of document.querySelectorAll('.bottom-nav a')) {
     if (link.hash === '#' + name) link.setAttribute('aria-current', 'page')
