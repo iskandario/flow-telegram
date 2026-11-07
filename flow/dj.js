@@ -17,7 +17,7 @@ export class DjDeck {
 }
 export function mountDj({root,context,load,tracks,beforePlay,message}){
   root.innerHTML='<div class="page-heading"><p class="eyebrow">РУЧНОЕ СВЕДЕНИЕ</p><h1>DJ-пульт.</h1><p>Две деки. Твой переход.</p></div><div class="dj-decks"></div><label class="range-label" for="djCrossfade">A · Кроссфейдер · B</label><input id="djCrossfade" type="range" min="0" max="1" step="0.01" value="0.5"><p class="dim">Sync BPM выравнивает темп. Совмещение ударов — вручную; темп меняется вместе с высотой тона. В памяти только треки двух дек.</p>'
-  let ctx, decks, limiter, crossfade=.5
+  let ctx, decks, limiter, crossfade=.5, generation=0
   const ensure=()=>{if(decks)return;ctx=context();limiter=ctx.createDynamicsCompressor();limiter.threshold.value=-3;limiter.ratio.value=12;limiter.connect(ctx.destination);decks=[new DjDeck(ctx,limiter),new DjDeck(ctx,limiter)];fade()}
   function fade(){if(!decks)return;decks[0].gain.gain.setTargetAtTime(Math.cos(crossfade*Math.PI/2),ctx.currentTime,.01);decks[1].gain.gain.setTargetAtTime(Math.sin(crossfade*Math.PI/2),ctx.currentTime,.01)}
   const cards=['A','B'].map((label,index)=>{
@@ -26,7 +26,7 @@ export function mountDj({root,context,load,tracks,beforePlay,message}){
     root.querySelector('.dj-decks').append(card)
     const q=s=>card.querySelector(s);let loading=false
     function controls(){for(const b of card.querySelectorAll('button,input'))b.disabled=loading||(!decks?.[index].buffer&&!b.matches('[data-load]'));q('[data-load]').disabled=loading||!q('select').value}
-    q('[data-load]').onclick=async()=>{const track=tracks().find(t=>t.id===q('select').value);if(!track||loading)return;beforePlay();ensure();decks[index].pause();decks[index].buffer=null;loading=true;controls();q('[data-title]').textContent='Подготавливаю трек…';try{const data=await load(track);decks[index].setTrack(data.buffer,data.grid.bpm);q('[data-title]').textContent=track.artist+' — '+track.title;q('[data-bpm]').value=data.grid.bpm?Math.round(data.grid.bpm*10)/10:'';q('[data-rate-slider]').value=0;q('[data-rate]').textContent='0%';q('[data-loop]').setAttribute('aria-pressed','false')}catch(e){q('[data-title]').textContent='Не удалось загрузить';message(e.message)}finally{loading=false;controls()}}
+    q('[data-load]').onclick=async()=>{const track=tracks().find(t=>t.id===q('select').value);if(!track||loading)return;beforePlay();ensure();decks[index].pause();decks[index].buffer=null;loading=true;controls();q('[data-title]').textContent='Подготавливаю трек…';try{const request=generation;const data=await load(track);if(request!==generation){q('[data-title]').textContent='Трек не выбран';return}decks[index].setTrack(data.buffer,data.grid.bpm);q('[data-title]').textContent=track.artist+' — '+track.title;q('[data-bpm]').value=data.grid.bpm?Math.round(data.grid.bpm*10)/10:'';q('[data-rate-slider]').value=0;q('[data-rate]').textContent='0%';q('[data-loop]').setAttribute('aria-pressed','false')}catch(e){q('[data-title]').textContent='Не удалось загрузить';message(e.message)}finally{loading=false;controls()}}
     q('[data-play]').onclick=async()=>{ensure();try{if(decks[index].source)decks[index].pause();else{beforePlay();await ctx.resume();decks[index].play()}}catch(e){message(e.message)}}
     q('[data-cue]').onclick=()=>{decks[index].pause();decks[index].seek(decks[index].cue)}
     q('[data-setcue]').onclick=()=>{decks[index].cue=decks[index].position();message(`Cue ${label}: ${decks[index].cue.toFixed(1)} с`)}
@@ -44,5 +44,5 @@ export function mountDj({root,context,load,tracks,beforePlay,message}){
   let catalog=''
   function refresh(){const all=tracks(),key=all.map(t=>t.id+'|'+t.title).join('\n');if(key===catalog)return;catalog=key;for(const card of cards){const select=card.querySelector('select'),value=select.value;select.replaceChildren(...all.map(t=>{const o=document.createElement('option');o.value=t.id;o.textContent=t.artist+' — '+t.title;return o}));if(all.some(t=>t.id===value))select.value=value;card.refreshControls()}}
   const timer=setInterval(()=>{if(root.hidden||document.hidden||!decks)return;cards.forEach((c,i)=>{const d=decks[i],p=d.position();c.querySelector('[data-time]').textContent=Math.floor(p/60)+':'+String(Math.floor(p%60)).padStart(2,'0');c.querySelector('[data-play]').textContent=d.source?'Ⅱ':'▶';if(document.activeElement!==c.querySelector('[data-seek]'))c.querySelector('[data-seek]').value=d.buffer?p/d.buffer.duration:0})},100)
-  return{refresh,stop(){decks?.forEach(d=>d.pause())},dispose(){clearInterval(timer);decks?.forEach(d=>{d.pause();d.buffer=null})}}
+  return{refresh,stop(release=false){if(release)generation++;decks?.forEach(d=>{d.pause();if(release){d.buffer=null;d.loop=null;d.offset=0}});if(release)for(const card of cards){card.querySelector('[data-title]').textContent='Трек не выбран';card.refreshControls()}},dispose(){clearInterval(timer);decks?.forEach(d=>{d.pause();d.buffer=null})}}
 }

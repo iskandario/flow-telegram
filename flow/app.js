@@ -1,8 +1,8 @@
-import { mountDj } from './dj.js?v=20261108-dj1'
-import { localLibrary } from './local-library.js?v=20261108-dj1'
-import { createVkLibrary } from './vk-library.js?v=20261108-dj1'
-import { AutoMix, smartOrder } from './engine.js?v=20261108-dj1'
-import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-dj1'
+import { mountDj } from './dj.js?v=20261108-dj2'
+import { localLibrary } from './local-library.js?v=20261108-dj2'
+import { createVkLibrary } from './vk-library.js?v=20261108-dj2'
+import { AutoMix, smartOrder } from './engine.js?v=20261108-dj2'
+import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-dj2'
 
 window.__flowBoot = true
 const $ = (id) => document.getElementById(id)
@@ -94,7 +94,7 @@ function stopListening() {
 async function listenTrack(track) {
   if (state.busy) return
   if (state.playing) stopSet()
-  dj.stop()
+  dj.stop(true)
   stopListening(); const generation = listenGeneration
   listenPanel.hidden = false; listenTitle.textContent = `${track.artist} — ${track.title}`
   try {
@@ -153,7 +153,7 @@ function analyzeGrid(buffer) {
     for (let i = 0; i < n; i++) mono[i] += ch[i] / buffer.numberOfChannels
   }
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./analysis.js?v=20261108-dj1', import.meta.url), { type: 'module' })
+    const worker = new Worker(new URL('./analysis.js?v=20261108-dj2', import.meta.url), { type: 'module' })
     const done = (fn, v) => { worker.terminate(); fn(v) }
     worker.onmessage = ({ data }) => (data.error ? done(reject, new Error(data.error)) : done(resolve, data))
     worker.onerror = () => done(reject, new Error('Анализ темпа не запустился'))
@@ -203,7 +203,7 @@ function wavBlob(buffer) {
 }
 
 async function separate(clip, onProgress) {
-  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-dj1')
+  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-dj2')
   const result = await stems.separateTwoStem(wavBlob(clip), (p) => onProgress(p?.percent || 0))
   const decode = async (name) => ctx.decodeAudioData(await result.stems.find((s) => s.name === name).blob.arrayBuffer())
   const [vocals, instrumental] = await Promise.all([decode('Vocals'), decode('Instrumental')])
@@ -242,7 +242,7 @@ async function startSet() {
   const list = chosen.length ? chosen : state.tracks
   if (list.length < 1) { status('Добавь музыку из VK, с телефона или через бота'); return }
   stopListening()
-  dj.stop()
+  dj.stop(true)
   haptic('medium')
   state.busy = true
   render()
