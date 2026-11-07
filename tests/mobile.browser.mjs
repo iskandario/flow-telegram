@@ -259,8 +259,20 @@ try {
   await loginPage.locator('.vk-app-login [data-check]').click()
   await loginPage.locator('#vkLoginPhone').waitFor({ state: 'hidden' })
   assert.match(await loginPage.locator('.vk-app-login [data-status]').textContent(), /не робот/)
+  let openAttempts = 0, frameAttempts = 0
+  await loginPage.route('**/api/app.php?a=vk-browser-open', route => {
+    openAttempts++
+    return route.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:'Server restarting'})})
+  })
+  await loginPage.route('**/api/app.php?a=vk-browser-frame', route => {
+    frameAttempts++
+    if(frameAttempts===1)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Frame unavailable'})})
+    return route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="430" height="760"><rect width="430" height="760" fill="white"/></svg>'})
+  })
   await loginPage.locator('.vk-app-login [data-browser]').click()
   await loginPage.locator('.vk-browser img').waitFor({ state: 'visible' })
+  assert.equal(openAttempts,1,'Recovery must not request a new login')
+  assert.ok(frameAttempts>=2,'Frame polling recovers after open and frame errors')
   await loginPage.locator('.vk-browser img').click({ position: { x: 20, y: 20 } })
   await loginPage.waitForFunction(() => !document.querySelector('#vkBrowserText').disabled)
   await loginPage.locator('#vkBrowserText').fill('test-login-input')

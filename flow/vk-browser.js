@@ -14,7 +14,7 @@ export function createVkBrowser({ api, onConnected, onLoginStep }) {
     <p data-status role="status" aria-live="polite"></p>`
   document.body.append(dialog)
   const $ = (s) => dialog.querySelector(s)
-  let timer = null, generation = 0, objectUrl = null, sending = false, loading = false, ticks = 0, fetchingFrame = false
+  let timer = null, generation = 0, objectUrl = null, sending = false, loading = false, ticks = 0, fetchingFrame = false, checking = false, failures = 0
   const message = (text) => { $('[data-status]').textContent = text }
   const json = async (action, data) => (await api(action, {}, data === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })).json()
   function lock() {
@@ -22,12 +22,16 @@ export function createVkBrowser({ api, onConnected, onLoginStep }) {
     $('img').style.pointerEvents = sending || loading ? 'none' : ''
   }
   async function check() {
+    if (checking) return false
+    checking = true
+    try {
     const ticket = generation
     const state = await json('vk-app-login-status')
     if (ticket !== generation || !dialog.open) return
     if (state.connected) { dialog.close(); await onConnected(); return true }
     if (onLoginStep && ['phone_required', 'code_required'].includes(state.login?.stage)) { dialog.close(); await onLoginStep(); return true }
     return false
+    } finally { checking = false }
   }
   async function frame(ticket) {
     if (ticket !== generation || !dialog.open || document.hidden || fetchingFrame) return
@@ -39,13 +43,14 @@ export function createVkBrowser({ api, onConnected, onLoginStep }) {
         const blob = await res.blob()
         if (ticket !== generation || !dialog.open) return
         if (objectUrl) URL.revokeObjectURL(objectUrl)
+        if (failures) message('Связь с окном VK восстановлена. Продолжай текущую проверку.'); failures = 0
         objectUrl = URL.createObjectURL(blob); $('img').src = objectUrl; $('img').hidden = false
         if (++ticks % 4 === 0 && await check()) return
       }
-    } catch (error) { if (ticket === generation) message(error.message) }
+    } catch (error) { if (ticket === generation) { failures++; message(error.message + ' Повторяю обновление окна; номер заново вводить не нужно.') } }
     finally {
       fetchingFrame = false
-      if (dialog.open && !document.hidden) { clearTimeout(timer); timer = setTimeout(() => frame(generation), 1500) }
+      if (dialog.open && !document.hidden) { clearTimeout(timer); timer = setTimeout(() => frame(generation), Math.min(10000, 1500 * 2 ** Math.min(failures, 3))) }
     }
   }
   async function input(data) {
@@ -102,6 +107,6 @@ export function createVkBrowser({ api, onConnected, onLoginStep }) {
       if (ticket !== generation) return
       message('Войди в VK в окне ниже. Пароль и код не сохраняются в интерфейсе FLOW.')
       loading = false; lock(); void frame(ticket)
-    } catch (error) { if (ticket === generation) { loading = false; lock(); message(error.message) } }
+    } catch (error) { if (ticket === generation) { loading = false; lock(); message(error.message + ' Пробую получить текущее окно без нового входа.'); void frame(ticket) } }
   } }
 }

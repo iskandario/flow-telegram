@@ -40,8 +40,9 @@ function vk_connector_request(int $uid, string $action, array $params = [], bool
         }]);
     $ok = curl_exec($ch); $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE); unset($ch);
     if ($oversized) throw new RuntimeException('Ответ сервера VK слишком большой');
-    if ($ok === false) throw new RuntimeException('Серверное окно VK недоступно. Попробуй позже.');
+    if ($ok === false) throw new RuntimeException('Не удалось дождаться ответа сервера FLOW. Он может запускаться после простоя. Повтори проверку подключения перед новым вводом номера.');
     if ($ranged && in_array($code, [200,206,416], true)) return ['body'=>$response,'status'=>$code,'headers'=>$upstreamHeaders];
+    if (in_array($code, [502,503,504], true)) throw new RuntimeException('Сервер FLOW временно не отвечает. Подожди около минуты и проверь подключение; не отправляй номер или SMS повторно.');
     if ($code !== 200) {
         $data = json_decode($response, true);
         throw new RuntimeException((string) ($data['error'] ?? 'Серверное окно VK не ответило'));

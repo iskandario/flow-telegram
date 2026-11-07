@@ -199,7 +199,7 @@ export class Sessions {
   async input(uid, input) {
     const session = await this.ensure(uid), page = session.page
     if (input.type === 'reload') {
-      await page.goto('https://vk.com/audio', { waitUntil: 'domcontentloaded', timeout: 45000 })
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 })
       session.needsLogin = false
       return { ok: true }
     }
@@ -221,7 +221,16 @@ export class Sessions {
     else throw new Error('Недопустимая команда окна VK')
     return { ok: true }
   }
-  async frame(uid) { const s = await this.ensure(uid); return s.page.screenshot({ type: 'jpeg', quality: 65, animations: 'disabled', timeout: 10000 }) }
+  async frame(uid) {
+    const s = await this.ensure(uid)
+    try {
+      // Do not fast-forward animations on an interactive verification page.
+      return await s.page.screenshot({ type: 'jpeg', quality: 55, animations: 'allow', timeout: 5000 })
+    } catch (error) {
+      if (error.name === 'TimeoutError') throw new Error('Не удалось обновить изображение VK за 5 секунд. Текущая страница не сброшена; FLOW повторит загрузку.')
+      throw error
+    }
+  }
   async userAgent(uid) {
     const session = await this.ensure(uid)
     return session.page.evaluate(() => navigator.userAgent)
