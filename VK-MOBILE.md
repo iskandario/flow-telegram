@@ -280,3 +280,9 @@ nonce и записывает AES-GCM ciphertext. Ключ расшифровк�
 Two independently loaded Web Audio decks, equal-power crossfader, low/mid/high EQ, cue and seek, ±16% tempo, four-beat loop and ±20 ms nudges. Sync matches BPM only; phase alignment is manual and pitch follows tempo. Selecting a deck downloads/decodes that selected track in memory; ordinary listening uses native audio requests. Switching to another playback mode releases the manual deck buffers. This is not persistent offline storage of the VK collection.
 
 WebKit and Chromium UI tests cover simultaneous playback, cue, loops, mode navigation and narrow viewports. Audio-clock tests cover tempo continuity and loop release. Waveform editing, pitch-preserving time stretch and separate headphone monitoring are not implemented.
+
+## Background import on REG.RU
+
+`POST vk-sync-start` creates an idempotent job in the authenticated user's library JSON. `GET vk-sync-status` exposes only progress. A CLI-only `api/vk-sync-worker.php` runs from REG.RU cron every minute, claims a page with a lease, and performs signed connector requests outside the library lock. Each committed page stores the cursor and upserts metadata into the main FLOW library. The client is not required to remain open. Retries use persisted backoff; a request for VK verification pauses the job. Logout invalidates the job so an in-flight page cannot repopulate a disconnected library.
+
+The worker's process lock prevents overlapping cron runs. User/catalog identity and job lease are checked before writes. Existing tracks are preserved; this is additive synchronization, not mirroring deletions from VK. Audio is not downloaded by synchronization. No permanent audio collection is stored on REG.RU or the phone.

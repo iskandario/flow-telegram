@@ -1,7 +1,7 @@
-import { createVkBrowser } from './vk-browser.js?v=20261108-catalog2'
-import { createVkAppLogin } from './vk-app-login.js?v=20261108-catalog2'
+import { createVkBrowser } from './vk-browser.js?v=20261108-background1'
+import { createVkAppLogin } from './vk-app-login.js?v=20261108-background1'
 /** Mobile VK browser. The server owns authorization and resolves expiring streams. */
-export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds, onChange, scanScope = () => null }) {
+export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds, onChange, scanScope = () => null, onSynced = async () => {} }) {
   const dialog = document.createElement('dialog')
   dialog.className = 'vk-dialog vk-library'
   dialog.setAttribute('aria-labelledby', 'vkTitle')
@@ -10,7 +10,7 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
     <div data-login><p class="dim" data-login-copy>Подключи свой VK, чтобы выбирать треки и плейлисты прямо с телефона.</p>
       <button class="play" data-connect>Подключить VK</button></div>
     <div class="vk-controls"><button class="ghost" data-refresh>Обновить подключение</button><button class="ghost" data-browser-window hidden>Окно VK</button><button class="ghost" data-logout hidden>Отключить</button></div>
-    <div data-browser hidden>
+    <section data-sync hidden><p data-sync-info role="status"></p><button class="ghost" data-sync-start>Обновить всю библиотеку в фоне</button></section><div data-browser hidden>
       <form><label class="search-field"><input type="search" placeholder="Поиск музыки в VK" aria-label="Поиск музыки в VK" maxlength="200"><button class="icon" type="submit" aria-label="Искать">⌕</button></label></form>
       <div class="vk-controls"><button class="ghost" data-my>Моя музыка</button><button class="ghost" data-playlists>Плейлисты</button></div>
       <select aria-label="Плейлист VK" hidden><option value="">Выбери плейлист</option></select>
@@ -24,6 +24,25 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
   const request = async (action, params, init) => (await api(action, params, init)).json()
   let tracks = [], playlists = [], selected = new Set(), query = { kind: 'my' }, nextOffset = null, playlistOffset = 0
   let generation = 0, busy = false, adding = false, connected = false, provider = null, scanController = null, visibleLimit = 100
+  let syncTimer=null, syncEnabled=false, syncSeen=-1
+  async function pollSync() {
+    clearTimeout(syncTimer)
+    if(!dialog.open || document.hidden || !syncEnabled)return
+    try {
+      const job=await request('vk-sync-status')
+      const active=['queued','running','retry'].includes(job.state)
+      $('[data-sync-info]').textContent=job.state==='done'?`Готово: ${job.received} треков в FLOW.`:active?`Сервер добавил ${job.received||0}${job.total?' из '+job.total:''} треков. Можно закрыть Mini App — загрузка продолжится.${job.state==='retry'?' Временный сбой, сервер повторит запрос.':''}`:job.error||'Запусти фоновую загрузку всей музыки.'
+      $('[data-sync-start]').disabled=active
+      if(job.received!==undefined && job.received!==syncSeen){syncSeen=job.received;await onSynced()}
+      if(active)syncTimer=setTimeout(pollSync,5000)
+    }catch(e){$('[data-sync-info]').textContent='Не удалось проверить прогресс. Серверная задача продолжает работать.';syncTimer=setTimeout(pollSync,10000)}
+  }
+  async function startSync(restart=false) {
+    try{await request('vk-sync-start',restart?{restart:1}:{},{method:'POST'});await pollSync()}
+    catch(e){$('[data-sync-info]').textContent=e.message}
+  }
+  $('[data-sync-start]').onclick=()=>startSync(true)
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)void pollSync();else clearTimeout(syncTimer)})
   let snapshotKey = null
   function saveProgress() {
     if (!snapshotKey || query.kind !== 'my') return
@@ -142,6 +161,9 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
       status(result.configured ? '' : 'Владелец FLOW ещё не настроил доступ к VK Музыке. Пока можно добавить файлы с телефона или через бота.', !result.configured)
       busy = false; lock()
       $('[data-connect]').disabled = !result.configured
+      syncEnabled=connected && result.syncAvailable===true
+      $('[data-sync]').hidden=!syncEnabled
+      if(syncEnabled){await startSync();render();status('Вся музыка добавляется сервером. Поиск и плейлисты доступны ниже.');return}
       if (connected) {
         const restored = query.kind === 'my' && restoreProgress()
         if (restored && nextOffset === null) { render(); status(`Загружено ${tracks.length} треков. «Моя музыка» обновит список заново.`) }
@@ -150,7 +172,7 @@ export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds
     } catch (e) { if (ticket === generation) { busy = false; lock(); status(e.message, true) } }
   }
   $('[data-close]').onclick = () => dialog.close()
-  dialog.addEventListener('close', () => { if (!adding) { generation++; scanController?.abort(); scanController = null; busy = false } })
+  dialog.addEventListener('close', () => { clearTimeout(syncTimer); if (!adding) { generation++; scanController?.abort(); scanController = null; busy = false } })
   $('[data-refresh]').onclick = refresh
   $('[data-browser-window]').onclick = () => browser.open()
   $('[data-connect]').onclick = async () => {

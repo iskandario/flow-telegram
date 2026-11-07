@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . "/vk-sync.php";
 
 function vk_connector_configured(): bool
 {
@@ -67,9 +68,11 @@ function vk_connector_stream(int $uid, array $track): void
 
 function vk_connector_api(int $uid, string $action): void
 {
-    if (in_array($action, ['vk-login', 'vk-app-login', 'vk-app-login-code', 'vk-phone-login', 'vk-login-phone', 'vk-logout', 'vk-add', 'vk-browser-open', 'vk-browser-input'], true) && $_SERVER['REQUEST_METHOD'] !== 'POST') { json_out(405, ['error' => 'POST only']); return; }
+    if (in_array($action, ['vk-sync-start', 'vk-login', 'vk-app-login', 'vk-app-login-code', 'vk-phone-login', 'vk-login-phone', 'vk-logout', 'vk-add', 'vk-browser-open', 'vk-browser-input'], true) && $_SERVER['REQUEST_METHOD'] !== 'POST') { json_out(405, ['error' => 'POST only']); return; }
     try {
-        if ($action === 'vk-status') json_out(200, vk_connector_request($uid, 'status'));
+        if ($action === 'vk-sync-status') json_out(200, vk_sync_public(read_library($uid)['vk_sync'] ?? null));
+        elseif ($action === 'vk-sync-start') json_out(200, vk_sync_start($uid, ($_GET['restart'] ?? '') === '1'));
+        elseif ($action === 'vk-status') json_out(200, array_merge(vk_connector_request($uid, 'status'), ['syncAvailable'=>true]));
         elseif ($action === 'vk-app-login') json_out(200, vk_connector_request($uid, 'app-login'));
         elseif ($action === 'vk-app-login-status') json_out(200, vk_connector_request($uid, 'app-login-status'));
         elseif ($action === 'vk-login' || $action === 'vk-browser-open') json_out(200, vk_connector_request($uid, 'open'));
@@ -99,6 +102,7 @@ function vk_connector_api(int $uid, string $action): void
         } elseif ($action === 'vk-list') json_out(200, vk_connector_request($uid, 'list', $_GET));
         elseif ($action === 'vk-playlists') json_out(200, vk_connector_request($uid, 'playlists', $_GET));
         elseif ($action === 'vk-logout') {
+            vk_sync_cancel($uid);
             vk_connector_request($uid, 'logout');
             with_library($uid, function (array &$lib) {
                 unset($lib['vk'], $lib['vk_pending'], $lib['vk_exchange']);

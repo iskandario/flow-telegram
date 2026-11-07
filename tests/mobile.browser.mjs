@@ -314,6 +314,27 @@ try {
   assert.equal(scanningOffsets.length, 7, 'Non-advancing cursor cannot loop indefinitely')
   await remote.close()
   assert.deepEqual(errors, [], 'Remote login has no runtime errors')
+  // Background mode creates a durable job and never scans VK pages from the client.
+  const bgContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true})
+  const bg=await bgContext.newPage();let syncStarted=false, bgTracks=[], clientScans=0
+  await bg.route('https://telegram.org/**',r=>r.fulfill({contentType:'text/javascript',body:''}))
+  await bg.addInitScript(()=>{window.Telegram={WebApp:{initData:'test',ready(){},expand(){}}}})
+  await bg.route('**/api/app.php?**',r=>{
+    const a=new URL(r.request().url()).searchParams.get('a')
+    if(a==='vk-list')clientScans++
+    if(a==='vk-sync-start'){assert.equal(r.request().method(),'POST');syncStarted=true}
+    const value=a==='list'?{tracks:bgTracks,user:{id:88}}:a==='vk-status'?{configured:true,connected:true,provider:'browser',profile:{id:7},syncAvailable:true}:a==='vk-sync-status'?{state:bgTracks.length?'done':'queued',received:bgTracks.length,total:2}:{state:'queued',received:0}
+    return r.fulfill({contentType:'application/json',body:JSON.stringify(value)})
+  })
+  await bg.goto(origin);await bg.locator('#importVk').click()
+  await bg.waitForFunction(()=>document.querySelector('[data-sync-info]').textContent.includes('Можно закрыть'))
+  assert.equal(syncStarted,true);assert.equal(clientScans,0)
+  await bg.goto('about:blank')
+  // Simulate server completion while the Mini App is not loaded.
+  bgTracks=[vk1,vk2]
+  await bg.goto(origin)
+  await bg.waitForFunction(()=>document.querySelectorAll('#library .track').length===2)
+  await bgContext.close()
   // A 1,156-track library must not trigger an audio download storm on opening or set startup.
   const largeContext = await browser.newContext({ viewport: { width: 390, height: 844 } })
   const large = await largeContext.newPage(), requestedAudio = new Set()
