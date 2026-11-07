@@ -1,5 +1,5 @@
-import { createVkBrowser } from './vk-browser.js'
-import { createVkAppLogin } from './vk-app-login.js'
+import { createVkBrowser } from './vk-browser.js?v=20261108-dj1'
+import { createVkAppLogin } from './vk-app-login.js?v=20261108-dj1'
 /** Mobile VK browser. The server owns authorization and resolves expiring streams. */
 export function createVkLibrary({ api, onAdded, onLogout, canImport, existingIds, onChange }) {
   const dialog = document.createElement('dialog')

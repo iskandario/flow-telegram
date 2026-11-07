@@ -1,5 +1,5 @@
 // Tempo/beat-grid analysis off the main thread.
-import { detectBpm, refineGrid } from './bpm.js'
+import { detectBpm, refineGrid } from './bpm.js?v=20261108-dj1'
 
 self.onmessage = ({ data }) => {
   try {
