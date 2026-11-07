@@ -1,0 +1,11 @@
+# Секреты и локальные файлы — не публикуем
+flow/api/config.local.php
+flow/data/*.json
+cloudflare/public/
+cloudflare/.wrangler/
+cloudflare/.kv-id
+cloudflare/wrangler.jsonc
+cloudflare/node_modules/
+*.zip
+_to_delete/
+.DS_Store

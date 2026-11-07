@@ -1,0 +1,4 @@
+public/
+.wrangler/
+.kv-id
+node_modules/

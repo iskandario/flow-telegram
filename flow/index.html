@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0e1016">
+<title>FLOW</title>
+<link rel="stylesheet" href="./style.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo">FLOW<i id="beat" data-beat="0"></i></div>
+    <span id="hello" class="chip"></span>
+  </header>
+
+  <section id="stage" class="stage">
+    <div class="now">
+      <small>СЕЙЧАС ИГРАЕТ</small>
+      <h1 id="nowTitle">Загрузка…</h1>
+      <p id="nowArtist"> </p>
+    </div>
+    <canvas id="viz" aria-hidden="true"></canvas>
+    <div class="bar"><span id="progress"></span></div>
+    <div class="meta-row">
+      <span><b id="bpm">—</b> BPM</span>
+      <span id="time">0:00</span>
+    </div>
+    <div class="up-next"><small>ДАЛЕЕ</small><span id="nextTitle">—</span></div>
+  </section>
+
+  <div class="seg" role="group" aria-label="Режим">
+    <button data-mode="mix" data-lock aria-pressed="true"><b>Автомикс</b><small>как AutoMix</small></button>
+    <button data-mode="mash" data-lock aria-pressed="false"><b>Мэшап</b><small>вокал + бит</small></button>
+  </div>
+  <label class="switch"><input type="checkbox" id="smart" data-lock checked><span></span>Умный порядок по темпу</label>
+
+  <button id="play" class="play">▶  Запустить сет</button>
+  <p id="status" class="status" role="status"></p>
+
+  <section class="lib">
+    <div class="lib-head">
+      <h2>Библиотека</h2>
+      <div><span id="count" class="dim"></span> <button id="selectAll" class="link" data-lock hidden>Выбрать все</button> <button id="refresh" class="icon" aria-label="Обновить">↻</button></div>
+    </div>
+    <div id="empty" class="empty" hidden>
+      <div class="disc"></div>
+      <p><b>Пришли боту музыку</b><br>Перешли треки из чатов или отправь файлами (mp3, m4a, wav, flac до 20 МБ) — и возвращайся сюда.</p>
+      <button id="toChat" class="ghost">Открыть чат с ботом</button>
+    </div>
+    <ul id="library"></ul>
+  </section>
+
+  <details class="lights">
+    <summary>💡 Светомузыка</summary>
+    <p class="dim">Лампы подключаются через Home Assistant: Сбер (интеграция SberDevices), Яндекс, Xiaomi, Hue и другие. Нужен адрес HA по https и долгоживущий токен (Профиль → Безопасность). Добавь в configuration.yaml:<br><code>http:<br>&nbsp;&nbsp;cors_allowed_origins:<br>&nbsp;&nbsp;&nbsp;&nbsp;- <span id="origin"></span></code></p>
+    <input id="haUrl" type="url" placeholder="https://xxxx.ui.nabu.casa" autocomplete="off" spellcheck="false">
+    <input id="haToken" type="password" placeholder="Токен Home Assistant" autocomplete="off">
+    <div class="row"><button id="findLamps" class="ghost">Найти лампы</button><button id="testLamps" class="ghost">Проверить</button></div>
+    <div id="lamps"></div>
+    <label class="switch"><input type="checkbox" id="lightOn" disabled><span></span>Свет в такт сету</label>
+    <select id="lightMode"><option value="bar">Мягко — смена на каждый такт</option><option value="beat">Жёстко — каждая доля</option></select>
+    <p id="lightStatus" class="dim" role="status"></p>
+  </details>
+
+  <footer class="dim">FLOW · сводит прямо на твоём телефоне</footer>
+</main>
+<script type="module" src="./app.js"></script>
+<script>
+  // If the network stalls the scripts (e.g. Cloudflare throttled by the ISP), say so instead of spinning forever.
+  setTimeout(function () {
+    if (window.__flowBoot) return
+    document.getElementById('nowTitle').textContent = 'Не загрузилось'
+    document.getElementById('nowArtist').textContent = 'Сеть обрывает загрузку. Попробуй другой интернет или включи VPN, затем открой заново.'
+  }, 12000)
+</script>
+</body>
+</html>
