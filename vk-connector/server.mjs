@@ -23,9 +23,9 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
   }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream2' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream3' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
-    const started = Date.now(); let actionName = 'request'
+    const started = Date.now(); let actionName = 'request', mediaKey = null
     try {
       let size = 0; const chunks = []
       for await (const chunk of req) { size += chunk.length; if (size > 8192) { json(res, 413, { error: 'Request too large' }); return }; chunks.push(chunk) }
@@ -41,7 +41,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
       if (!/^\d{1,20}$/.test(String(uid)) || !ACTIONS.has(action) || !params || typeof params !== 'object' || Array.isArray(params)) return json(res, 400, { error: 'Invalid request' })
       actionName = action
       const user = String(uid)
-      const resolvedKey = user + ':' + JSON.stringify([params.vk_user, params.identity])
+      const resolvedKey = user + ':' + JSON.stringify([params.vk_user, params.identity]); mediaKey = resolvedKey
       for (const [key, value] of resolvedMedia) if (Date.now() - value.at > 120000) resolvedMedia.delete(key)
       const warm = ['stream','file'].includes(action) && !params.resource && resolvedMedia.get(resolvedKey)
       const result = warm ? { resolved: warm.resolved, userAgent: warm.userAgent } : await sessions.serial(user, async () => {
@@ -98,11 +98,13 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
         res.writeHead(200, { 'Content-Type': action === 'frame' ? 'image/jpeg' : 'audio/mpeg', 'Content-Length': result.length, 'Cache-Control': 'no-store' }); res.end(result)
       } else json(res, 200, result)
     } catch (error) {
-      console.warn(JSON.stringify({event:'rpc_failure',action:actionName,kind:error.name||'Error',elapsedMs:Date.now()-started}))
+      if (mediaKey) resolvedMedia.delete(mediaKey)
+      const errorCode = /^[A-Za-z_0-9]{1,64}$/.test(error.code || '') ? error.code : error.name || 'Error'
+      console.warn(JSON.stringify({event:'rpc_failure',action:actionName,kind:errorCode,elapsedMs:Date.now()-started}))
       // Never log request bodies: login text, cookies and media URLs are private.
       if (res.headersSent || res.destroyed) { res.destroy(); return }
       const message = error instanceof SyntaxError ? 'Некорректный запрос' : error.message
-      json(res, 422, { error: /^(VK|Войди|Пройди|Подключи|Некоррект|Неизвест|Не удалось|Все окна|Открой|Слишком|Недопуст|Трек|Для сета|Пустой|Защищ|Прямые|Аудио)/.test(message) ? message : 'Сервер VK не ответил. Повтори попытку.' })
+      json(res, 422, { code: errorCode, error: /^(VK|Войди|Пройди|Подключи|Некоррект|Неизвест|Не удалось|Все окна|Открой|Слишком|Недопуст|Трек|Для сета|Пустой|Защищ|Прямые|Аудио)/.test(message) ? message : 'Сервер VK не ответил. Повтори попытку.' })
     }
   })
 }

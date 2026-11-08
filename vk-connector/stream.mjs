@@ -61,7 +61,14 @@ export async function streamAudio(req, res, entry, register, open = openMedia) {
   const timer = setTimeout(() => controller.abort(), 280000); timer.unref?.()
   let upstream
   try {
-    upstream = await open(entry.url, { signal: controller.signal, range: /\.m3u8(?:[?#]|$)/i.test(entry.url) ? undefined : req.headers.range, userAgent: entry.userAgent })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        upstream = await open(entry.url, { signal: controller.signal, range: /\.m3u8(?:[?#]|$)/i.test(entry.url) ? undefined : req.headers.range, userAgent: entry.userAgent })
+        break
+      } catch (error) {
+        if (attempt === 2 || controller.signal.aborted || !['ECONNRESET','EPIPE','ETIMEDOUT','EAI_AGAIN','ECONNREFUSED'].includes(error.code)) throw error
+      }
+    }
     const type = String(upstream.headers['content-type'] || '')
     const playlist = /\.m3u8(?:[?#]|$)/i.test(entry.url) || /mpegurl/i.test(type)
     res.setHeader('Cache-Control', 'no-store')
