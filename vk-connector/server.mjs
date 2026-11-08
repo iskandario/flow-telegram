@@ -16,14 +16,14 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
   let transfers = 0
   const transferWaiters = []
   const transfer = async (url, options) => {
-    if (transfers >= 2) await new Promise(resolve => transferWaiters.push(resolve))
+    if (transfers >= 1) await new Promise(resolve => transferWaiters.push(resolve))
     else transfers++
     try { return await download(url, options) }
     finally { const next = transferWaiters.shift(); if (next) next(); else transfers-- }
   }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream6' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream7' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
     const started = Date.now(); let actionName = 'request', mediaKey = null
     try {
@@ -44,7 +44,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
       const resolvedKey = user + ':' + JSON.stringify([params.vk_user, params.identity]); mediaKey = resolvedKey
       for (const [key, value] of resolvedMedia) if (Date.now() - value.at > 600000) resolvedMedia.delete(key)
       const warm = ['stream','file'].includes(action) && !params.resource && resolvedMedia.get(resolvedKey)
-      const result = warm ? { resolved: warm.resolved, userAgent: warm.userAgent } : await sessions.serial(user, async () => {
+      const result = action === 'stream' && params.resource ? { entry: resources.get(user, params.track_id, params.resource) } : warm ? { resolved: warm.resolved, userAgent: warm.userAgent } : await sessions.serial(user, async () => {
         if (action === 'stream' && params.resource) return { entry: resources.get(user, params.track_id, params.resource) }
         if (action === 'status') return sessions.status(user)
         if (action === 'open') return sessions.open(user)
@@ -102,7 +102,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
     } catch (error) {
       if (mediaKey) resolvedMedia.delete(mediaKey)
       const errorCode = /^[A-Za-z_0-9]{1,64}$/.test(error.code || '') ? error.code : error.name || 'Error'
-      console.warn(JSON.stringify({event:'rpc_failure',action:actionName,kind:errorCode,elapsedMs:Date.now()-started}))
+      console.warn(JSON.stringify({event:'rpc_failure',action:actionName,kind:errorCode,cause:error.cause?.code,location:String(error.stack || '').split('\n').filter(line => /(?:sessions|remote-state|stream|media)\.mjs:\d+/.test(line)).map(line => line.match(/(?:sessions|remote-state|stream|media)\.mjs:\d+:\d+/)?.[0]).filter(Boolean).slice(0,3),elapsedMs:Date.now()-started}))
       // Never log request bodies: login text, cookies and media URLs are private.
       if (res.headersSent || res.destroyed) { res.destroy(); return }
       const message = error instanceof SyntaxError ? 'Некорректный запрос' : error.message

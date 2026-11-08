@@ -18,7 +18,7 @@ test('PHP durable session storage survives a fresh connector, protects ciphertex
   assert.equal((await fetch(url)).status,401)
   const store=new RemoteState(url,secret),sessions=new Sessions({secret,directory:root,store});
   const state={cookies:[{name:'session',value:'PRIVATE-VK-SESSION'}],origins:[]}
-  await sessions.save('7',{connected:true,context:{storageState:async()=>state}})
+  await sessions.save('7',{connected:true,context:{pages:()=>[],cookies:async()=>state.cookies}})
   assert.equal((await readFile(root+'/data/vk-state/7.bin')).includes(Buffer.from('PRIVATE-VK-SESSION')),false)
   assert.deepEqual(await new Sessions({secret,directory:root,store}).saved('7'),state)
   assert.equal(await sessions.saved('8'),undefined)

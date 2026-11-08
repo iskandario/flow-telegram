@@ -76,7 +76,7 @@ test('session persistence is authenticated encryption and logout erases it', asy
   const sessions = new Sessions({ secret, directory: dir })
   try {
     const state = { cookies: [{ name: 'remixsid', value: 'secret-cookie' }], origins: [] }
-    await sessions.save('42', { connected: true, context: { storageState: async () => state } })
+    await sessions.save('42', { connected: true, context: { cookies: async () => state.cookies, pages: () => [] } })
     const bytes = await readFile(sessions.path('42'))
     assert.ok(!bytes.includes(Buffer.from('secret-cookie')))
     assert.deepEqual(await sessions.saved('42'), state)

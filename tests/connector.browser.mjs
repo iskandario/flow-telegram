@@ -37,6 +37,7 @@ try {
   const button = await session.page.locator('#login').boundingBox()
   await sessions.input('42', { type: 'click', x: button.x + 10, y: button.y + 10 })
   assert.equal((await sessions.status('42')).profile.name, 'VK test user')
+  await session.saving
   assert.ok(!(await readFile(sessions.path('42'))).includes(Buffer.from('signed')))
   assert.equal((await sessions.call('42', 'audio.get', {})).items[0].title, 'Track')
   await session.page.evaluate(() => { window.vkApi.api = async () => { throw { error_code: 5 } } })

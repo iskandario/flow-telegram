@@ -14,8 +14,17 @@ export function allowNavigation(request) {
   try { frame = request.frame() } catch { return trustedPage(request.url()) }
   return !!frame.parentFrame() || trustedPage(request.url())
 }
+export function skipMusicAsset(request) {
+  if (!['image', 'media', 'font'].includes(request.resourceType())) return false
+  try {
+    const frame = request.frame()
+    if (frame.parentFrame() || !/^https:\/\/(?:www\.)?vk\.(?:com|ru)\/audio(?:[/?#]|$)/.test(frame.url())) return false
+    const u = new URL(request.url())
+    return /(^|\.)(userapi\.com|vkuseraudio\.(net|com)|vkuserphoto\.ru)$/.test(u.hostname)
+  } catch { return false }
+}
 export class Sessions {
-  constructor({ secret, directory, store = null, max = 2, launch = () => chromium.launch({ headless: true }) }) {
+  constructor({ secret, directory, store = null, max = 2, launch = () => chromium.launch({ headless: true, args: ['--disable-gpu', '--renderer-process-limit=2'] }) }) {
     this.key = createHash('sha256').update('flow-vk-browser|' + secret).digest()
     this.store = store
     this.directory = directory; this.max = max; this.launch = launch
@@ -37,7 +46,16 @@ export class Sessions {
   async save(uid, session) {
     if (!session.connected && !session.accountVerified) return
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.key, iv)
-    const plain = JSON.stringify({ at: Date.now(), state: await session.context.storageState() })
+    // storageState() opens temporary pages for every origin. On a 512 MB host
+    // that can kill Chromium while a song is starting. Snapshot existing pages only.
+    const origins = new Map((session.storageOrigins || []).map(o => [o.origin, o]))
+    for (const page of session.context.pages()) {
+      if (page.isClosed() || !trustedPage(page.url())) continue
+      const origin = await page.evaluate(() => ({ origin: location.origin, localStorage: Object.keys(localStorage).map(name => ({name, value: localStorage.getItem(name)})) })).catch(() => null)
+      if (origin) origins.set(origin.origin, origin)
+    }
+    session.storageOrigins = [...origins.values()]
+    const plain = JSON.stringify({ at: Date.now(), state: { cookies: await session.context.cookies(), origins: session.storageOrigins } })
     const encrypted = Buffer.concat([cipher.update(plain), cipher.final()])
     if (this.store) { await this.store.write(uid, Buffer.concat([iv, cipher.getAuthTag(), encrypted])); return }
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
@@ -75,7 +93,11 @@ export class Sessions {
       // Login stays on VK's own origins; neither arbitrary navigation nor downloads are exposed.
       await context.route('**/*', async (route) => {
         try {
-          if (!allowNavigation(route.request())) return await route.abort()
+          const request = route.request()
+          if (!allowNavigation(request)) return await route.abort()
+          // Only decorative CDN assets on the music page. Verification images,
+          // frames, scripts and all login pages retain their normal behavior.
+          if (skipMusicAsset(request)) return await route.abort()
           return await route.fallback()
         } catch {
           // Closing a page can cancel an in-flight route. Never crash other sessions.
@@ -83,7 +105,7 @@ export class Sessions {
         }
       })
       const page = await context.newPage()
-      session = { context, page, used: Date.now(), connected: false, lastSave: 0, restored: !!restoredState, ...(restoredState ? { appLogin: { mode: 'phone', stage: 'checking' } } : {}) }
+      session = { context, page, used: Date.now(), connected: false, lastSave: 0, restored: !!restoredState, storageOrigins: restoredState?.origins || [], ...(restoredState ? { appLogin: { mode: 'phone', stage: 'checking' } } : {}) }
       const attach = (current) => {
         current.on('download', (download) => void download.cancel())
         current.on('popup', (popup) => {
@@ -153,7 +175,13 @@ export class Sessions {
     const connected = authenticated && !!session.musicVerified
     session.connected = connected
     if (connected) this.warmCatalog(uid, session)
-    if (connected && Date.now() - session.lastSave > 30000) { await this.save(uid, session); session.lastSave = Date.now() }
+    if (connected && Date.now() - session.lastSave > 300000 && !session.saving) {
+      session.lastSave = Date.now()
+      session.saving = this.save(uid, session).catch(() => {
+        session.lastSave = Date.now() - 240000
+        console.warn(JSON.stringify({event:'session_save_retry'}))
+      }).finally(() => { session.saving = null })
+    }
     return { configured: true, provider: 'browser', connected, authenticated, profile: connected ? { id: result.id, name: result.name } : null, viewport: { width: WIDTH, height: HEIGHT }, audioPreparation: { scanned: session.audioScanCount || 0, total: session.audioScanTotal || null, ready: session.audioUrls?.size || 0, running: !!session.warming } }
   }
   async status(uid) {
@@ -322,8 +350,9 @@ export class Sessions {
   }
   invalidateMedia(uid) { const session=this.sessions.get(uid);session?.catalogCache?.clear();session?.audioUrls?.clear() }
   async logout(uid) {
-    if (this.store) await this.store.remove(uid)
     const session = this.sessions.get(uid)
+    await session?.saving
+    if (this.store) await this.store.remove(uid)
     this.sessions.delete(uid)
     await session?.context.close().catch(() => {})
     await rm(this.path(uid), { force: true }); await rm(this.path(uid) + '.tmp', { force: true })
@@ -335,7 +364,7 @@ export class Sessions {
     }
   }
   async close() {
-    for (const [uid, s] of this.sessions) { await this.save(uid, s).catch(() => {}); await s.context.close().catch(() => {}) }
+    for (const [uid, s] of this.sessions) { await s.saving; await this.save(uid, s).catch(() => {}); await s.context.close().catch(() => {}) }
     this.sessions.clear()
     const browser = await this.browserPromise
     await browser?.close()

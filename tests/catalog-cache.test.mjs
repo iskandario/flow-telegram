@@ -37,3 +37,15 @@ test('background audio preparation scans all 1156 tracks in bounded pages, witho
  assert.deepEqual(offsets,[0,200,400,600,800,1000]);assert.equal(session.audioUrls.size,1156)
  assert.equal(session.audioScanCount,1156);assert.equal(session.audioScanTotal,1156)
 })
+test('a slow or failed session backup cannot delay playback authorization',async()=>{
+ const sessions=new Sessions({secret:'test',directory:'/unused'})
+ let rejectSave
+ sessions.save=()=>new Promise((_,reject)=>{rejectSave=reject})
+ sessions.warmCatalog=()=>{}
+ const session={musicVerified:true,lastSave:0,page:{url:()=> 'https://vk.com/audio',evaluate:async()=>({id:7,api:true,name:'VK'})}}
+ const state=await sessions.profile('7',session)
+ assert.equal(state.connected,true)
+ assert.ok(session.saving)
+ rejectSave(new TypeError('fetch failed'));await session.saving
+ assert.equal((await sessions.profile('7',session)).connected,true)
+})
