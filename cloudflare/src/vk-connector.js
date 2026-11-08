@@ -14,7 +14,7 @@ async function rpc(env, uid, action, params = {}, binary = false, range = '') {
     const data = await response.json().catch(() => ({}))
     throw new Error(data.error || 'Серверное окно VK не ответило')
   }
-  if (binary) return new Response(response.body, { status: response.status, headers: { 'Content-Type': action === 'frame' ? 'image/jpeg' : 'audio/mpeg', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...Object.fromEntries(['content-range', 'content-length', 'accept-ranges'].filter(h => response.headers.has(h)).map(h => [h, response.headers.get(h)])) } })
+  if (binary) return new Response(response.body, { status: response.status, headers: { 'Content-Type': action === 'frame' ? 'image/jpeg' : response.headers.get('content-type') || 'audio/mpeg', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...Object.fromEntries(['content-range', 'content-length', 'accept-ranges'].filter(h => response.headers.has(h)).map(h => [h, response.headers.get(h)])) } })
   return response.json()
 }
 export async function connectorFile(env, uid, track, range = '') {

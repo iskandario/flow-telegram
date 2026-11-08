@@ -136,10 +136,18 @@ export async function downloadAudio(value, { ffmpeg = 'ffmpeg', fetch = fetchMed
   const bytes = await hlsBytes(url, data.toString(), get)
   const dir = await mkdtemp(join(tmpdir(), 'flow-vk-'))
   try {
-    const input = join(dir, 'input'), output = join(dir, 'audio.mp3')
+    const input = join(dir, 'input')
+    let output = join(dir, 'audio.m4a')
     await writeFile(input, bytes, { mode: 0o600 })
-    try { await run(ffmpeg, ['-nostdin', '-y', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-i', input, '-vn', '-t', '720', '-c:a', 'libmp3lame', '-b:a', '192k', '-fs', String(MAX), '-f', 'mp3', output], { timeout: 90000, maxBuffer: 8192 }) }
-    catch { throw new Error('Не удалось обработать HLS-аудио на сервере FLOW') }
+    const common = ['-nostdin', '-y', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-i', input, '-vn', '-t', '720']
+    try {
+      // AAC HLS can be repackaged without spending CPU re-encoding every sample.
+      await run(ffmpeg, [...common, '-c:a', 'copy', '-movflags', '+faststart', '-fs', String(MAX), '-f', 'mp4', output], { timeout: 30000, maxBuffer: 8192 })
+    } catch {
+      output = join(dir, 'audio.mp3')
+      try { await run(ffmpeg, [...common, '-c:a', 'libmp3lame', '-b:a', '192k', '-fs', String(MAX), '-f', 'mp3', output], { timeout: 90000, maxBuffer: 8192 }) }
+      catch { throw new Error('Не удалось обработать HLS-аудио на сервере FLOW') }
+    }
     const result = await readFile(output)
     if (result.length < 512 || result.length > MAX) throw new Error('Некорректный размер аудио')
     return result

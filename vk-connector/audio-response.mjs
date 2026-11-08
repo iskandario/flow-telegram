@@ -1,7 +1,7 @@
 // Native HTML audio can request small byte ranges instead of a whole browser Blob.
 export function audioResponse(req, res, bytes) {
   const length = bytes.length
-  res.setHeader('Content-Type', 'audio/mpeg')
+  res.setHeader('Content-Type', bytes.subarray(4,8).toString() === 'ftyp' ? 'audio/mp4' : 'audio/mpeg')
   res.setHeader('Accept-Ranges', 'bytes')
   const range = req.headers.range
   let start = 0, end = length - 1

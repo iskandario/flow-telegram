@@ -103,14 +103,17 @@ test('media rejects private destinations and parses encrypted HLS, fMP4 maps, an
   await assert.rejects(() => hlsBytes('https://a.userapi.com/a', '#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key"\n#EXT-X-ENDLIST', async () => plain), /Защищённый/)
 })
 
-test('connector converts a synthetic HLS stream with real ffmpeg', async (t) => {
+test('connector remuxes synthetic AAC HLS without re-encoding, with real ffmpeg', async (t) => {
   try { await run('ffmpeg', ['-version']) } catch { t.skip('ffmpeg unavailable'); return }
   await mkdir('work', { recursive: true }); const dir = await mkdtemp(path('work/connector-hls-'))
   try {
     await run('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=1', '-c:a', 'aac', '-f', 'mpegts', dir + '/segment'])
     const segment = await readFile(dir + '/segment')
     const result = await downloadAudio('https://a.userapi.com/a.m3u8', { fetch: async (url) => url.pathname.endsWith('.m3u8') ? Buffer.from('#EXTM3U\n#EXTINF:1,\npart.ts\n#EXT-X-ENDLIST') : segment })
-    assert.equal(result.subarray(0, 3).toString(), 'ID3'); assert.ok(result.length > 512)
+    assert.equal(result.subarray(4, 8).toString(), 'ftyp'); assert.ok(result.length > 512)
+    await writeFile(dir + '/result.m4a', result)
+    const probe = await run('ffprobe', ['-v','error','-show_entries','stream=codec_name','-of','csv=p=0',dir+'/result.m4a'])
+    assert.equal(probe.stdout.trim(), 'aac')
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
