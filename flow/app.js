@@ -1,8 +1,8 @@
-import { mountDj } from './dj.js?v=20261108-stream1'
-import { localLibrary } from './local-library.js?v=20261108-stream1'
-import { createVkLibrary } from './vk-library.js?v=20261108-stream1'
-import { AutoMix, smartOrder } from './engine.js?v=20261108-stream1'
-import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-stream1'
+import { mountDj } from './dj.js?v=20261108-stream2'
+import { localLibrary } from './local-library.js?v=20261108-stream2'
+import { createVkLibrary } from './vk-library.js?v=20261108-stream2'
+import { AutoMix, smartOrder } from './engine.js?v=20261108-stream2'
+import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-stream2'
 
 window.__flowBoot = true
 const $ = (id) => document.getElementById(id)
@@ -76,12 +76,24 @@ async function trackBlob(track) {
   return blob
 }
 
+let vkWarmup = null
+function warmVk() {
+  if (!vkWarmup) vkWarmup = api('vk-status').then(r => r.json()).then(async state => {
+    if (state.provider === 'browser' && !state.connected) return (await api('vk-app-login-status')).json()
+    return state
+  }).catch(error => { vkWarmup = null; throw error })
+  return vkWarmup
+}
+
 // Ordinary listening does not start analysis, stem models or an offline download.
 const listenPanel = document.createElement('section')
 listenPanel.className = 'listen-panel'; listenPanel.hidden = true
 const listenTitle = document.createElement('p'), listenAudio = document.createElement('audio')
 listenAudio.controls = true; listenAudio.preload = 'none'
-listenPanel.append(listenTitle, listenAudio); $('library').before(listenPanel)
+const listenStatus = document.createElement('p'), listenRetry = document.createElement('button')
+listenStatus.setAttribute('role', 'status'); listenStatus.className = 'dim'
+listenRetry.className = 'ghost'; listenRetry.textContent = 'Повторить запуск'; listenRetry.hidden = true
+listenPanel.append(listenTitle, listenAudio, listenStatus, listenRetry); $('library').before(listenPanel)
 const libraryMore = document.createElement('button')
 libraryMore.className = 'ghost'; libraryMore.id = 'libraryMore'; libraryMore.textContent = 'Показать ещё 100'
 $('library').after(libraryMore)
@@ -98,6 +110,8 @@ async function listenTrack(track) {
   if (state.playing) stopSet()
   dj.stop(true)
   stopListening(); const generation = listenGeneration
+  listenRetry.hidden = true; listenRetry.onclick = () => listenTrack(track)
+  listenStatus.textContent = 'Подключаем аудио…'
   listenPanel.hidden = false; listenTitle.textContent = `${track.artist} — ${track.title}`
   try {
     if (track.source === 'local') {
@@ -105,6 +119,11 @@ async function listenTrack(track) {
       if (generation !== listenGeneration) return
       listenObjectUrl = URL.createObjectURL(blob); listenAudio.src = listenObjectUrl
     } else {
+      if (track.source === 'vk') {
+        listenStatus.textContent = 'Готовим VK. После простоя серверу может понадобиться около минуты…'
+        await warmVk()
+        if (generation !== listenGeneration) return
+      }
       await api('media-session', {}, { method: 'POST' })
       if (generation !== listenGeneration) return
       const url = new URL(API); url.searchParams.set('a', 'file'); url.searchParams.set('id', track.id)
@@ -113,7 +132,7 @@ async function listenTrack(track) {
     }
     if (navigator.mediaSession && window.MediaMetadata) navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: 'FLOW' })
     await listenAudio.play().catch(() => status('Нажми ▶ в плеере для воспроизведения'))
-  } catch (error) { if (generation === listenGeneration) status(error.message) }
+  } catch (error) { if (generation === listenGeneration) { listenStatus.textContent = error.message; listenRetry.hidden = false; status(error.message) } }
 }
 if ('mediaSession' in navigator) {
   const handlers = {
@@ -127,9 +146,9 @@ if ('mediaSession' in navigator) {
   listenAudio.onplay = () => { navigator.mediaSession.playbackState = 'playing' }
   listenAudio.onpause = () => { navigator.mediaSession.playbackState = 'paused' }
 }
-listenAudio.onwaiting = () => status('Загружаем фрагмент аудио…')
-listenAudio.onplaying = () => status('Играет · ' + listenTitle.textContent)
-listenAudio.onerror = () => status('Не удалось воспроизвести трек. Выбери его ещё раз для обновления ссылки.')
+listenAudio.onwaiting = () => { listenStatus.textContent = 'Загружаем фрагмент аудио…' }
+listenAudio.onplaying = () => { listenStatus.textContent = 'Играет'; listenRetry.hidden = true; status('Играет · ' + listenTitle.textContent) }
+listenAudio.onerror = () => { vkWarmup = null; listenStatus.textContent = 'Аудио не открылось. Повтори запуск; заново входить в VK не нужно, пока он сам не попросит подтверждение.'; listenRetry.hidden = false; status('Не удалось открыть аудио') }
 
 // ---------- Audio graph ----------
 
@@ -171,7 +190,7 @@ function analyzeGrid(buffer) {
     for (let i = 0; i < n; i++) mono[i] += ch[i] / buffer.numberOfChannels
   }
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./analysis.js?v=20261108-stream1', import.meta.url), { type: 'module' })
+    const worker = new Worker(new URL('./analysis.js?v=20261108-stream2', import.meta.url), { type: 'module' })
     const done = (fn, v) => { worker.terminate(); fn(v) }
     worker.onmessage = ({ data }) => (data.error ? done(reject, new Error(data.error)) : done(resolve, data))
     worker.onerror = () => done(reject, new Error('Анализ темпа не запустился'))
@@ -222,7 +241,7 @@ function wavBlob(buffer) {
 }
 
 async function separate(clip, onProgress) {
-  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-stream1')
+  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-stream2')
   const result = await stems.separateTwoStem(wavBlob(clip), (p) => onProgress(p?.percent || 0))
   const decode = async (name) => ctx.decodeAudioData(await result.stems.find((s) => s.name === name).blob.arrayBuffer())
   const [vocals, instrumental] = await Promise.all([decode('Vocals'), decode('Instrumental')])
@@ -480,6 +499,7 @@ async function loadLibrary() {
     try { local = await deviceLibrary.list() } catch (e) { $('importStatus').textContent = e.message }
     // Preserve object identity so queue highlighting stays stable.
     const previous = new Map(state.tracks.map((t) => [t.id, t]))
+    if (data.tracks.some(t => t.source === 'vk')) void warmVk().catch(() => {})
     state.tracks = [...data.tracks, ...local].map((t) => Object.assign(previous.get(t.id) || {}, t, { bpm: cachedGrid(t.id)?.bpm || 0 }))
     for (const id of [...state.selected]) if (!state.tracks.some((t) => t.id === id)) state.selected.delete(id)
     if (data.user?.name) $('hello').textContent = data.user.name
