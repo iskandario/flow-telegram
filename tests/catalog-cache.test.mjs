@@ -25,3 +25,15 @@ test('playback resolves a playable catalog entry without another VK API request'
  sessions.profile=async()=>({connected:true,profile:{id:8}})
  assert.deepEqual(await sessions.call('7','audio.getById',{audios:'7_3'}),[]);assert.equal(calls,1)
 })
+test('background audio preparation scans all 1156 tracks in bounded pages, without downloading audio',async()=>{
+ const sessions=new Sessions({secret:'test',directory:'/unused'}),session={},offsets=[]
+ sessions.sessions.set('7',session)
+ sessions.call=async(uid,method,args)=>{
+   assert.equal(method,'audio.get');assert.equal(args.count,200);offsets.push(args.offset)
+   const items=Array.from({length:Math.min(200,1156-args.offset)},(_,i)=>({id:args.offset+i+1,owner_id:7,url:'https://a.userapi.com/a.mp3'}))
+   const response={count:1156,items};sessions.rememberAudio(session,7,response);return response
+ }
+ sessions.warmCatalog('7',session);await session.warming
+ assert.deepEqual(offsets,[0,200,400,600,800,1000]);assert.equal(session.audioUrls.size,1156)
+ assert.equal(session.audioScanCount,1156);assert.equal(session.audioScanTotal,1156)
+})

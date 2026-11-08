@@ -104,6 +104,34 @@ export class Sessions {
     } catch (error) { await context?.close().catch(() => {}); this.sessions.delete(uid); throw error }
     finally { this.creating-- }
   }
+  rememberAudio(session, profileId, response) {
+    session.audioUrls ||= new Map()
+    for (const raw of response?.items || []) {
+      if (!raw?.url || raw.content_restricted || !raw.id || !raw.owner_id) continue
+      const key = `${raw.owner_id}_${raw.id}`
+      if (!session.audioUrls.has(key) && session.audioUrls.size >= 10000) session.audioUrls.delete(session.audioUrls.keys().next().value)
+      session.audioUrls.set(key, {at:Date.now(),profileId,raw})
+    }
+  }
+  warmCatalog(uid, session) {
+    if (session.warming || Date.now() - (session.catalogWarmedAt || 0) < 5 * 60000) return
+    session.catalogWarmedAt = Date.now()
+    session.warming = (async () => {
+      let offset = 0
+      while (offset < 10000) {
+        // Yield between pages: interactive playback requests enter the queue first.
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        if (this.sessions.get(uid) !== session || session.needsLogin) return
+        const value = await this.serial(uid, () => this.call(uid, 'audio.get', {offset,count:200}))
+        const rows = value?.items || []
+        if (!rows.length) return
+        offset += rows.length
+        session.audioScanCount = offset
+        session.audioScanTotal = Number(value.count) || offset
+        if (offset >= Number(value.count || offset)) return
+      }
+    })().catch(() => { session.catalogWarmedAt = Date.now() - 4 * 60000 }).finally(() => { session.warming = null })
+  }
   async profile(uid, session) {
     if (!trustedPage(session.page.url())) return { configured: true, provider: 'browser', connected: false, profile: null }
     const result = await session.page.evaluate(() => ({ id: Number(window.vk?.id) || 0, api: typeof window.vkApi?.api === 'function', name: document.querySelector('.top_profile_name, [data-testid="topnav-profile-name"], [class*="TopNavBtn__profileName"]')?.textContent?.trim() || 'VK' })).catch(() => ({ id: 0 }))
@@ -117,14 +145,16 @@ export class Sessions {
       }).catch(() => null)
       session.musicVerified = !!verified
       if (verified) {
+        this.rememberAudio(session, result.id, verified)
         session.catalogCache ||= new Map()
         session.catalogCache.set(JSON.stringify([result.id,'audio.get',{offset:0,count:50}]), {at:Date.now(),response:verified})
       }
     }
     const connected = authenticated && !!session.musicVerified
     session.connected = connected
+    if (connected) this.warmCatalog(uid, session)
     if (connected && Date.now() - session.lastSave > 30000) { await this.save(uid, session); session.lastSave = Date.now() }
-    return { configured: true, provider: 'browser', connected, authenticated, profile: connected ? { id: result.id, name: result.name } : null, viewport: { width: WIDTH, height: HEIGHT } }
+    return { configured: true, provider: 'browser', connected, authenticated, profile: connected ? { id: result.id, name: result.name } : null, viewport: { width: WIDTH, height: HEIGHT }, audioPreparation: { scanned: session.audioScanCount || 0, total: session.audioScanTotal || null, ready: session.audioUrls?.size || 0, running: !!session.warming } }
   }
   async status(uid) {
     const existing = this.sessions.get(uid)
@@ -249,6 +279,14 @@ export class Sessions {
     if (method === 'audio.getById') {
       const ids = String(params.audios || '').split(',')
       const found = new Map()
+      for (const id of ids) {
+        const key = id.split('_').slice(0,2).join('_')
+        const cached = session.audioUrls?.get(key)
+        if (cached && cached.profileId === state.profile?.id && Date.now() - cached.at < 600000) {
+          const raw = cached.raw
+          if (id === key || id === key+'_'+raw.access_key) found.set(id, raw)
+        }
+      }
       for (const [key, cached] of session.catalogCache || []) {
         if (Date.now() - cached.at > 600000 || JSON.parse(key)[0] !== state.profile?.id) continue
         for (const raw of cached.response?.items || []) {
@@ -270,18 +308,19 @@ export class Sessions {
       } catch (e) { return { ok: false, code: Number(e?.error_code || e?.error?.error_code) || 0 } }
     }, { method, params })
     if (!result.ok) {
-      if ([5, 14, 17].includes(result.code)) { session.needsLogin = true; session.connected = false; session.musicVerified = false; session.catalogCache?.clear(); throw new Error('VK просит подтвердить вход. Открой окно подключения.') }
+      if ([5, 14, 17].includes(result.code)) { session.needsLogin = true; session.connected = false; session.musicVerified = false; session.catalogCache?.clear(); session.audioUrls?.clear(); throw new Error('VK просит подтвердить вход. Открой окно подключения.') }
       if ([6, 9, 29].includes(result.code)) throw new Error('VK временно ограничил запросы. Попробуй позже.')
       throw new Error('VK не ответил на запрос. Проверь окно подключения и повтори.')
     }
     if (cacheable && !result.response?.error) {
+      if (method === 'audio.get') this.rememberAudio(session, state.profile?.id, result.response)
       for(const [key,value] of session.catalogCache)if(Date.now()-value.at>=120000)session.catalogCache.delete(key)
       while(session.catalogCache.size>=32)session.catalogCache.delete(session.catalogCache.keys().next().value)
       session.catalogCache.set(cacheKey,{at:Date.now(),response:result.response})
     }
     return result.response
   }
-  invalidateMedia(uid) { this.sessions.get(uid)?.catalogCache?.clear() }
+  invalidateMedia(uid) { const session=this.sessions.get(uid);session?.catalogCache?.clear();session?.audioUrls?.clear() }
   async logout(uid) {
     if (this.store) await this.store.remove(uid)
     const session = this.sessions.get(uid)
