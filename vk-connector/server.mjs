@@ -12,7 +12,7 @@ const ACTIONS = new Set(['status', 'open', 'app-login', 'app-login-status', 'app
 const json = (res, status, data) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)) }
 export function connector({ secret, sessions, download = downloadAudio, stream = streamAudio }) {
   if (typeof secret !== 'string' || secret.length < 32) throw new Error('FLOW_CONNECTOR_SECRET must contain at least 32 characters')
-  const used = new Map(), media = new Map(), resources = new StreamResources()
+  const used = new Map(), media = new Map(), resolvedMedia = new Map(), resources = new StreamResources()
   let transfers = 0
   const transferWaiters = []
   const transfer = async (url, options) => {
@@ -23,7 +23,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
   }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream1' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream2' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
     const started = Date.now(); let actionName = 'request'
     try {
@@ -41,7 +41,10 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
       if (!/^\d{1,20}$/.test(String(uid)) || !ACTIONS.has(action) || !params || typeof params !== 'object' || Array.isArray(params)) return json(res, 400, { error: 'Invalid request' })
       actionName = action
       const user = String(uid)
-      const result = await sessions.serial(user, async () => {
+      const resolvedKey = user + ':' + JSON.stringify([params.vk_user, params.identity])
+      for (const [key, value] of resolvedMedia) if (Date.now() - value.at > 120000) resolvedMedia.delete(key)
+      const warm = ['stream','file'].includes(action) && !params.resource && resolvedMedia.get(resolvedKey)
+      const result = warm ? { resolved: warm.resolved, userAgent: warm.userAgent } : await sessions.serial(user, async () => {
         if (action === 'stream' && params.resource) return { entry: resources.get(user, params.track_id, params.resource) }
         if (action === 'status') return sessions.status(user)
         if (action === 'open') return sessions.open(user)
@@ -52,40 +55,45 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
         if (action === 'app-login-code') return sessions.appLoginCode(user, params.code)
         if (action === 'frame') return sessions.frame(user)
         if (action === 'input') return sessions.input(user, params)
-        if (action === 'logout') { resources.clear(user); for (const key of media.keys()) if (key.startsWith(user + ':')) media.delete(key); return sessions.logout(user) }
+        if (action === 'logout') { resources.clear(user); for (const key of resolvedMedia.keys()) if (key.startsWith(user + ':')) resolvedMedia.delete(key); for (const key of media.keys()) if (key.startsWith(user + ':')) media.delete(key); return sessions.logout(user) }
         const call = (method, args) => sessions.call(user, method, args)
         if (action === 'list') return list(call, params)
         if (action === 'playlists') return playlists(call, params)
-        const state = await sessions.status(user)
+        const cachedResolve = ['stream','file'].includes(action) && resolvedMedia.get(resolvedKey)
+        if (cachedResolve) return { resolved: cachedResolve.resolved, userAgent: cachedResolve.userAgent }
+        let state = await sessions.status(user)
+        if (!state.connected && sessions.appLoginStatus) state = await sessions.appLoginStatus(user)
         if (!state.connected) throw new Error('Войди в VK через окно подключения')
         if (params.vk_user && Number(params.vk_user) !== state.profile.id) throw new Error('Подключи тот аккаунт VK, из которого добавлен трек')
-        const cacheKey = user + ':' + JSON.stringify(params.identity || params)
-        const cached = media.get(cacheKey)
-        if (action === 'file' && cached && Date.now() - cached.at < 600000) return { transfer: cached.promise }
         const resolved = await resolve(call, params.identity || params)
         if (resolved.track.duration > 720) throw new Error('Для сета выбери трек короче 12 минут')
-        if (action === 'stream') return { entry: { url: resolved.url, userAgent: sessions.userAgent ? await sessions.userAgent(user) : undefined } }
-        if (action === 'file') {
-          // Audio transfer must not hold the browser RPC queue: deck B and
-          // catalog/status requests can resolve while deck A is downloading.
+        if (action === 'stream' || action === 'file') {
           const userAgent = sessions.userAgent ? await sessions.userAgent(user) : undefined
-          const entry = { at: Date.now() }
-          entry.promise = transfer(resolved.url, { userAgent }).catch(error => {
-            if (media.get(cacheKey) === entry) media.delete(cacheKey)
+          while (resolvedMedia.size >= 32) resolvedMedia.delete(resolvedMedia.keys().next().value)
+          resolvedMedia.set(resolvedKey, { at: Date.now(), resolved, userAgent })
+          return { resolved, userAgent }
+        }
+        return { track: resolved.track, profile: state.profile }
+      })
+      if (action === 'stream' || (action === 'file' && download === downloadAudio && /\.mp3(?:[?#]|$)/i.test(result.resolved?.url))) {
+        const entry = result.entry || { url: result.resolved.url, userAgent: result.userAgent }
+        await stream(req, res, entry, url => '?a=file&id=' + encodeURIComponent(params.track_id) + '&stream=1&resource=' + resources.add(user, params.track_id, url, entry.userAgent))
+        return
+      }
+      if (action === 'file') {
+        let entry = media.get(resolvedKey)
+        if (!entry || Date.now() - entry.at >= 600000) {
+          entry = { at: Date.now() }
+          entry.promise = transfer(result.resolved.url, { userAgent: result.userAgent }).catch(error => {
+            if (media.get(resolvedKey) === entry) media.delete(resolvedKey)
             throw error
           })
           entry.promise.catch(() => {})
           while (media.size >= 2) media.delete(media.keys().next().value)
-          media.set(cacheKey, entry)
-          return { transfer: entry.promise }
+          media.set(resolvedKey, entry)
         }
-        return { track: resolved.track, profile: state.profile }
-      })
-      if (action === 'stream') {
-        await stream(req, res, result.entry, url => '?a=file&id=' + encodeURIComponent(params.track_id) + '&stream=1&resource=' + resources.add(user, params.track_id, url, result.entry.userAgent))
-        return
+        audioResponse(req, res, await entry.promise); return
       }
-      if (action === 'file' && result.transfer) { audioResponse(req, res, await result.transfer); return }
       if (Buffer.isBuffer(result)) {
         res.writeHead(200, { 'Content-Type': action === 'frame' ? 'image/jpeg' : 'audio/mpeg', 'Content-Length': result.length, 'Cache-Control': 'no-store' }); res.end(result)
       } else json(res, 200, result)

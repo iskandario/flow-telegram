@@ -145,3 +145,24 @@ test('browser capacity counts concurrent openings once and recovers after discon
     assert.equal(sessions.sessions.size, 1)
   } finally { await sessions.close(); await rm(directory, { recursive: true, force: true }) }
 })
+
+test('successive native media ranges reuse the resolved URL without touching the VK browser', async () => {
+  let calls=0, checks=0
+  const sessions={serial:(_uid,fn)=>fn(),status:async()=>{checks++;return {connected:true,profile:{id:7}}},call:async()=>{calls++;return [raw]},logout:async()=>({ok:true})}
+  const server=connector({secret,sessions,stream:async(_req,res)=>res.end('audio')})
+  await new Promise(r=>server.listen(0,'127.0.0.1',r))
+  const call=async(action,params={})=>{
+    const body=JSON.stringify({uid:'7',action,params}),time=String(Date.now()),nonce=randomBytes(16).toString('hex')
+    const r=await fetch(`http://127.0.0.1:${server.address().port}/rpc`,{method:'POST',body,headers:{'X-Flow-Time':time,'X-Flow-Nonce':nonce,'X-Flow-Signature':createHmac('sha256',secret).update(`${time}\n${nonce}\n${body}`).digest('hex')}})
+    await r.text();return r.status
+  }
+  const params={identity:{id:3,ownerId:7},vk_user:7,track_id:'vk:7_3'}
+  try {
+    assert.equal(await call('stream',params),200)
+    assert.equal(await call('stream',params),200)
+    assert.equal(calls,1);assert.equal(checks,1)
+    assert.equal(await call('stream',{...params,vk_user:8}),422)
+    await call('logout');await call('stream',params)
+    assert.equal(calls,2,'Logout invalidates the resolved URL')
+  } finally {await new Promise(r=>server.close(r))}
+})
