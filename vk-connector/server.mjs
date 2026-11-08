@@ -23,7 +23,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
   }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream3' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream4' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
     const started = Date.now(); let actionName = 'request', mediaKey = null
     try {
@@ -42,7 +42,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
       actionName = action
       const user = String(uid)
       const resolvedKey = user + ':' + JSON.stringify([params.vk_user, params.identity]); mediaKey = resolvedKey
-      for (const [key, value] of resolvedMedia) if (Date.now() - value.at > 120000) resolvedMedia.delete(key)
+      for (const [key, value] of resolvedMedia) if (Date.now() - value.at > 600000) resolvedMedia.delete(key)
       const warm = ['stream','file'].includes(action) && !params.resource && resolvedMedia.get(resolvedKey)
       const result = warm ? { resolved: warm.resolved, userAgent: warm.userAgent } : await sessions.serial(user, async () => {
         if (action === 'stream' && params.resource) return { entry: resources.get(user, params.track_id, params.resource) }
@@ -77,7 +77,9 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
       })
       if (action === 'stream' || (action === 'file' && download === downloadAudio && /\.mp3(?:[?#]|$)/i.test(result.resolved?.url))) {
         const entry = result.entry || { url: result.resolved.url, userAgent: result.userAgent }
+        try {
         await stream(req, res, entry, url => '?a=file&id=' + encodeURIComponent(params.track_id) + '&stream=1&resource=' + resources.add(user, params.track_id, url, entry.userAgent))
+        } catch (error) { if (error.code === 'VK_MEDIA_EXPIRED') sessions.invalidateMedia?.(user); throw error }
         return
       }
       if (action === 'file') {

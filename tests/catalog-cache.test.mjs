@@ -16,3 +16,12 @@ test('larger metadata requests advance by actual raw rows, not requested count',
  const page=await list(async(method,args)=>{assert.equal(args.count,200);return {count:1156,items:Array.from({length:49},(_,i)=>({id:i+1,owner_id:7,title:'track',url:'https://example.test'}))}},{kind:'my',offset:49})
  assert.equal(page.nextOffset,98)
 })
+test('playback resolves a playable catalog entry without another VK API request',async()=>{
+ const sessions=new Sessions({secret:'test',directory:'/unused'});let calls=0
+ const raw={id:3,owner_id:7,title:'Track',url:'https://a.userapi.com/a.mp3'}
+ const session={catalogCache:new Map([[JSON.stringify([7,'audio.get',{}]),{at:Date.now(),response:{items:[raw]}}]]),page:{url:()=> 'https://vk.com/audio',evaluate:async()=>{calls++;return {ok:true,response:[]}}}}
+ sessions.ensure=async()=>session;sessions.profile=async()=>({connected:true,profile:{id:7}})
+ assert.deepEqual(await sessions.call('7','audio.getById',{audios:'7_3'}),[raw]);assert.equal(calls,0)
+ sessions.profile=async()=>({connected:true,profile:{id:8}})
+ assert.deepEqual(await sessions.call('7','audio.getById',{audios:'7_3'}),[]);assert.equal(calls,1)
+})

@@ -38,7 +38,7 @@ export async function openMedia(value, { signal, range, userAgent } = {}, redire
         if (redirects >= 3) return reject(Error('Слишком много перенаправлений аудио'))
         openMedia(mediaUrl(res.headers.location, url), { signal, range, userAgent }, redirects + 1).then(resolve, reject); return
       }
-      if (![200, 206, 416].includes(res.statusCode)) { res.resume(); reject(Error('VK не отдал аудио. Запусти трек снова.')); return }
+      if (![200, 206, 416].includes(res.statusCode)) { res.resume(); reject(Object.assign(Error('VK не отдал аудио. Запусти трек снова.'), {code: [403,404,410].includes(res.statusCode) ? 'VK_MEDIA_EXPIRED' : 'VK_MEDIA_UNAVAILABLE'})); return }
       resolve(res)
     })
     req.setTimeout(30000, () => req.destroy(Error('Аудиосервер VK не ответил')))

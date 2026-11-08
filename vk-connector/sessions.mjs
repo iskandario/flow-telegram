@@ -109,12 +109,17 @@ export class Sessions {
     const result = await session.page.evaluate(() => ({ id: Number(window.vk?.id) || 0, api: typeof window.vkApi?.api === 'function', name: document.querySelector('.top_profile_name, [data-testid="topnav-profile-name"], [class*="TopNavBtn__profileName"]')?.textContent?.trim() || 'VK' })).catch(() => ({ id: 0 }))
     const authenticated = result.id > 0 && result.api && !session.needsLogin
     if (authenticated && !session.musicVerified) {
-      session.musicVerified = await session.page.evaluate(async () => {
+      const verified = await session.page.evaluate(async () => {
         try {
-          const value = await Promise.race([window.vkApi.api('audio.get', { count: 1, offset: 0, v: '5.204' }), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))])
-          return Array.isArray(value?.items) && !value.error
+          const value = await Promise.race([window.vkApi.api('audio.get', { count: 50, offset: 0, v: '5.204' }), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))])
+          return Array.isArray(value?.items) && !value.error ? value : null
         } catch { return false }
-      }).catch(() => false)
+      }).catch(() => null)
+      session.musicVerified = !!verified
+      if (verified) {
+        session.catalogCache ||= new Map()
+        session.catalogCache.set(JSON.stringify([result.id,'audio.get',{offset:0,count:50}]), {at:Date.now(),response:verified})
+      }
     }
     const connected = authenticated && !!session.musicVerified
     session.connected = connected
@@ -241,6 +246,18 @@ export class Sessions {
     if (/\/challenge/.test(session.page.url())) throw new Error('Пройди проверку в окне VK и повтори')
     const state = await this.profile(uid, session)
     if (!state.connected) throw new Error('Войди в VK через окно подключения')
+    if (method === 'audio.getById') {
+      const ids = String(params.audios || '').split(',')
+      const found = new Map()
+      for (const [key, cached] of session.catalogCache || []) {
+        if (Date.now() - cached.at > 600000 || JSON.parse(key)[0] !== state.profile?.id) continue
+        for (const raw of cached.response?.items || []) {
+          const id = `${raw.owner_id}_${raw.id}`
+          if (raw.url && !raw.content_restricted) { found.set(id, raw); if (raw.access_key) found.set(id+'_'+raw.access_key,raw) }
+        }
+      }
+      if (ids.length && ids.every(id => found.has(id))) return ids.map(id => found.get(id))
+    }
     const cacheable = ['audio.get', 'audio.getPlaylists'].includes(method)
     const cacheKey = JSON.stringify([state.profile?.id, method, params])
     session.catalogCache ||= new Map()
@@ -264,6 +281,7 @@ export class Sessions {
     }
     return result.response
   }
+  invalidateMedia(uid) { this.sessions.get(uid)?.catalogCache?.clear() }
   async logout(uid) {
     if (this.store) await this.store.remove(uid)
     const session = this.sessions.get(uid)
