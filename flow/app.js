@@ -76,12 +76,25 @@ async function trackBlob(track) {
   return blob
 }
 
-let vkWarmup = null
+let vkWarmup = null, vkWarmedAt = 0
 function warmVk() {
-  if (!vkWarmup) vkWarmup = api('vk-status').then(r => r.json()).then(async state => {
-    if (state.provider === 'browser' && !state.connected) return (await api('vk-app-login-status')).json()
-    return state
-  }).catch(error => { vkWarmup = null; throw error })
+  if (Date.now() - vkWarmedAt > 5 * 60000) vkWarmup = null
+  if (!vkWarmup) {
+    vkWarmedAt = Date.now()
+    vkWarmup = (async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const state = await (await api('vk-status')).json()
+          if (state.provider === 'browser' && !state.connected) return (await api('vk-app-login-status')).json()
+          return state
+        } catch (error) {
+          const temporary = error instanceof TypeError || [502,503,504].includes(error.status) || /не отвечает|дождаться|после простоя/i.test(error.message)
+          if (attempt || !temporary) throw error
+          await new Promise(resolve => setTimeout(resolve, 1200))
+        }
+      }
+    })().catch(error => { vkWarmup = null; throw error })
+  }
   return vkWarmup
 }
 

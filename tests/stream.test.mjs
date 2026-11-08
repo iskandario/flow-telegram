@@ -27,7 +27,8 @@ test('audio forwards the first bytes before the upstream file finishes', async (
   const gate = new Promise(resolve => { release = resolve })
   const upstream = Readable.from((async function* () { yield Buffer.alloc(8192, 1); await gate; yield Buffer.alloc(8192, 2) })())
   upstream.statusCode = 200; upstream.headers = { 'content-type': 'audio/mpeg', 'content-length': '16384' }
-  const server = createServer((req, res) => streamAudio(req, res, { url: 'https://a.userapi.com/a.mp3' }, () => '', async () => upstream).catch(() => res.destroy()))
+  let opens = 0
+  const server = createServer((req, res) => streamAudio(req, res, { url: 'https://a.userapi.com/a.mp3' }, () => '', async () => { if (++opens === 1) throw Object.assign(new Error('socket reset'), {code:'ECONNRESET'}); return upstream }).catch(() => res.destroy()))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   try {
     const response = await fetch(`http://127.0.0.1:${server.address().port}`, { signal: AbortSignal.timeout(3000) })
@@ -38,5 +39,6 @@ test('audio forwards the first bytes before the upstream file finishes', async (
     let total = first.value.length
     for (;;) { const part = await reader.read(); if (part.done) break; total += part.value.length }
     assert.equal(total, 16384)
+    assert.equal(opens, 2, 'A reset before headers is retried without restarting playback')
   } finally { release(); await new Promise(resolve => server.close(resolve)) }
 })
