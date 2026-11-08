@@ -6,15 +6,24 @@ import { Sessions } from './sessions.mjs'
 import { RemoteState } from './remote-state.mjs'
 import { audioResponse } from './audio-response.mjs'
 import { list, playlists, resolve } from './music.mjs'
+import { StreamResources, streamAudio } from './stream.mjs'
 import { downloadAudio } from './media.mjs'
-const ACTIONS = new Set(['status', 'open', 'app-login', 'app-login-status', 'app-login-code', 'phone-login', 'login-phone', 'frame', 'input', 'logout', 'list', 'playlists', 'track', 'file'])
+const ACTIONS = new Set(['status', 'open', 'app-login', 'app-login-status', 'app-login-code', 'phone-login', 'login-phone', 'frame', 'input', 'logout', 'list', 'playlists', 'track', 'file', 'stream'])
 const json = (res, status, data) => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)) }
-export function connector({ secret, sessions, download = downloadAudio }) {
+export function connector({ secret, sessions, download = downloadAudio, stream = streamAudio }) {
   if (typeof secret !== 'string' || secret.length < 32) throw new Error('FLOW_CONNECTOR_SECRET must contain at least 32 characters')
-  const used = new Map(), media = new Map()
+  const used = new Map(), media = new Map(), resources = new StreamResources()
+  let transfers = 0
+  const transferWaiters = []
+  const transfer = async (url, options) => {
+    if (transfers >= 2) await new Promise(resolve => transferWaiters.push(resolve))
+    else transfers++
+    try { return await download(url, options) }
+    finally { const next = transferWaiters.shift(); if (next) next(); else transfers-- }
+  }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-catalog2' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream1' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
     const started = Date.now(); let actionName = 'request'
     try {
@@ -33,6 +42,7 @@ export function connector({ secret, sessions, download = downloadAudio }) {
       actionName = action
       const user = String(uid)
       const result = await sessions.serial(user, async () => {
+        if (action === 'stream' && params.resource) return { entry: resources.get(user, params.track_id, params.resource) }
         if (action === 'status') return sessions.status(user)
         if (action === 'open') return sessions.open(user)
         if (action === 'phone-login') return sessions.phoneLogin(user, params.restart === true)
@@ -42,7 +52,7 @@ export function connector({ secret, sessions, download = downloadAudio }) {
         if (action === 'app-login-code') return sessions.appLoginCode(user, params.code)
         if (action === 'frame') return sessions.frame(user)
         if (action === 'input') return sessions.input(user, params)
-        if (action === 'logout') { for (const key of media.keys()) if (key.startsWith(user + ':')) media.delete(key); return sessions.logout(user) }
+        if (action === 'logout') { resources.clear(user); for (const key of media.keys()) if (key.startsWith(user + ':')) media.delete(key); return sessions.logout(user) }
         const call = (method, args) => sessions.call(user, method, args)
         if (action === 'list') return list(call, params)
         if (action === 'playlists') return playlists(call, params)
@@ -51,23 +61,38 @@ export function connector({ secret, sessions, download = downloadAudio }) {
         if (params.vk_user && Number(params.vk_user) !== state.profile.id) throw new Error('Подключи тот аккаунт VK, из которого добавлен трек')
         const cacheKey = user + ':' + JSON.stringify(params.identity || params)
         const cached = media.get(cacheKey)
-        if (action === 'file' && cached && Date.now() - cached.at < 600000) return cached.bytes
+        if (action === 'file' && cached && Date.now() - cached.at < 600000) return { transfer: cached.promise }
         const resolved = await resolve(call, params.identity || params)
         if (resolved.track.duration > 720) throw new Error('Для сета выбери трек короче 12 минут')
+        if (action === 'stream') return { entry: { url: resolved.url, userAgent: sessions.userAgent ? await sessions.userAgent(user) : undefined } }
         if (action === 'file') {
-          const bytes = await download(resolved.url, { userAgent: sessions.userAgent ? await sessions.userAgent(user) : undefined })
+          // Audio transfer must not hold the browser RPC queue: deck B and
+          // catalog/status requests can resolve while deck A is downloading.
+          const userAgent = sessions.userAgent ? await sessions.userAgent(user) : undefined
+          const entry = { at: Date.now() }
+          entry.promise = transfer(resolved.url, { userAgent }).catch(error => {
+            if (media.get(cacheKey) === entry) media.delete(cacheKey)
+            throw error
+          })
+          entry.promise.catch(() => {})
           while (media.size >= 2) media.delete(media.keys().next().value)
-          media.set(cacheKey, { at: Date.now(), bytes }); return bytes
+          media.set(cacheKey, entry)
+          return { transfer: entry.promise }
         }
         return { track: resolved.track, profile: state.profile }
       })
-      if (action === 'file' && Buffer.isBuffer(result)) { audioResponse(req, res, result); return }
+      if (action === 'stream') {
+        await stream(req, res, result.entry, url => '?a=file&id=' + encodeURIComponent(params.track_id) + '&stream=1&resource=' + resources.add(user, params.track_id, url, result.entry.userAgent))
+        return
+      }
+      if (action === 'file' && result.transfer) { audioResponse(req, res, await result.transfer); return }
       if (Buffer.isBuffer(result)) {
         res.writeHead(200, { 'Content-Type': action === 'frame' ? 'image/jpeg' : 'audio/mpeg', 'Content-Length': result.length, 'Cache-Control': 'no-store' }); res.end(result)
       } else json(res, 200, result)
     } catch (error) {
       console.warn(JSON.stringify({event:'rpc_failure',action:actionName,kind:error.name||'Error',elapsedMs:Date.now()-started}))
       // Never log request bodies: login text, cookies and media URLs are private.
+      if (res.headersSent || res.destroyed) { res.destroy(); return }
       const message = error instanceof SyntaxError ? 'Некорректный запрос' : error.message
       json(res, 422, { error: /^(VK|Войди|Пройди|Подключи|Некоррект|Неизвест|Не удалось|Все окна|Открой|Слишком|Недопуст|Трек|Для сета|Пустой|Защищ|Прямые|Аудио)/.test(message) ? message : 'Сервер VK не ответил. Повтори попытку.' })
     }

@@ -81,11 +81,13 @@ try {
     await card.locator('[data-load]').click()
     await card.locator('[data-play]').waitFor()
     await page.waitForFunction(d => !document.querySelector(`[data-deck="${d}"] [data-play]`).disabled, deck)
+    await card.locator('.dj-advanced summary').click()
     await card.locator('[data-bpm]').fill('120')
     await card.locator('[data-bpm]').dispatchEvent('change')
     await card.locator('[data-play]').click()
   }
   await page.waitForFunction(() => [...document.querySelectorAll('[data-play]')].every(b => b.textContent === 'Ⅱ'))
+  await page.screenshot({path:'work/mobile-dj-updated.png',fullPage:true})
   assert.equal(await page.locator('.listen-panel audio').evaluate(a => a.paused), true)
   await page.locator('[data-deck="A"] [data-loop]').click()
   assert.equal(await page.locator('[data-deck="A"] [data-loop]').getAttribute('aria-pressed'), 'true')

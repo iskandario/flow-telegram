@@ -1,8 +1,8 @@
-import { mountDj } from './dj.js?v=20261108-background1'
-import { localLibrary } from './local-library.js?v=20261108-background1'
-import { createVkLibrary } from './vk-library.js?v=20261108-background1'
-import { AutoMix, smartOrder } from './engine.js?v=20261108-background1'
-import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-background1'
+import { mountDj } from './dj.js?v=20261108-stream1'
+import { localLibrary } from './local-library.js?v=20261108-stream1'
+import { createVkLibrary } from './vk-library.js?v=20261108-stream1'
+import { AutoMix, smartOrder } from './engine.js?v=20261108-stream1'
+import { LightShow, findLamps, loadSettings, saveSettings } from './lights.js?v=20261108-stream1'
 
 window.__flowBoot = true
 const $ = (id) => document.getElementById(id)
@@ -13,6 +13,7 @@ tg?.setHeaderColor?.('#0b0b0f')
 tg?.setBackgroundColor?.('#0b0b0f')
 try { tg?.disableVerticalSwipes?.() } catch {}
 const initData = tg?.initData || ''
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback' } catch {}
 const haptic = (kind = 'light') => { try { tg?.HapticFeedback?.impactOccurred(kind) } catch {} }
 
 const API = new URL('./api/app.php', location.href).href
@@ -90,6 +91,7 @@ function stopListening() {
   listenGeneration++; listenAudio.pause(); listenAudio.removeAttribute('src'); listenAudio.load()
   if (listenObjectUrl) URL.revokeObjectURL(listenObjectUrl)
   listenObjectUrl = null
+  if (navigator.mediaSession) { navigator.mediaSession.playbackState = 'none'; navigator.mediaSession.metadata = null }
 }
 async function listenTrack(track) {
   if (state.busy) return
@@ -106,11 +108,27 @@ async function listenTrack(track) {
       await api('media-session', {}, { method: 'POST' })
       if (generation !== listenGeneration) return
       const url = new URL(API); url.searchParams.set('a', 'file'); url.searchParams.set('id', track.id)
+      if (track.source === 'vk' && listenAudio.canPlayType('application/vnd.apple.mpegurl')) url.searchParams.set('stream', '1')
       listenAudio.src = url.href
     }
+    if (navigator.mediaSession && window.MediaMetadata) navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: 'FLOW' })
     await listenAudio.play().catch(() => status('Нажми ▶ в плеере для воспроизведения'))
   } catch (error) { if (generation === listenGeneration) status(error.message) }
 }
+if ('mediaSession' in navigator) {
+  const handlers = {
+    play: () => listenAudio.play().catch(() => status('Нажми Play в FLOW')),
+    pause: () => listenAudio.pause(),
+    seekto: ({ seekTime }) => { if (Number.isFinite(seekTime)) listenAudio.currentTime = seekTime },
+    seekbackward: ({ seekOffset = 10 }) => { listenAudio.currentTime = Math.max(0, listenAudio.currentTime - seekOffset) },
+    seekforward: ({ seekOffset = 10 }) => { if (Number.isFinite(listenAudio.duration)) listenAudio.currentTime = Math.min(listenAudio.duration, listenAudio.currentTime + seekOffset) }
+  }
+  for (const [action, handler] of Object.entries(handlers)) try { navigator.mediaSession.setActionHandler(action, handler) } catch {}
+  listenAudio.onplay = () => { navigator.mediaSession.playbackState = 'playing' }
+  listenAudio.onpause = () => { navigator.mediaSession.playbackState = 'paused' }
+}
+listenAudio.onwaiting = () => status('Загружаем фрагмент аудио…')
+listenAudio.onplaying = () => status('Играет · ' + listenTitle.textContent)
 listenAudio.onerror = () => status('Не удалось воспроизвести трек. Выбери его ещё раз для обновления ссылки.')
 
 // ---------- Audio graph ----------
@@ -146,14 +164,14 @@ function storeGrid(id, grid) {
 }
 
 function analyzeGrid(buffer) {
-  const n = buffer.length
+  const n = Math.min(buffer.length, buffer.sampleRate * 90)
   const mono = new Float32Array(n)
   for (let c = 0; c < buffer.numberOfChannels; c++) {
     const ch = buffer.getChannelData(c)
     for (let i = 0; i < n; i++) mono[i] += ch[i] / buffer.numberOfChannels
   }
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./analysis.js?v=20261108-background1', import.meta.url), { type: 'module' })
+    const worker = new Worker(new URL('./analysis.js?v=20261108-stream1', import.meta.url), { type: 'module' })
     const done = (fn, v) => { worker.terminate(); fn(v) }
     worker.onmessage = ({ data }) => (data.error ? done(reject, new Error(data.error)) : done(resolve, data))
     worker.onerror = () => done(reject, new Error('Анализ темпа не запустился'))
@@ -161,18 +179,19 @@ function analyzeGrid(buffer) {
   })
 }
 
-async function decodeTrack(track) {
+async function decodeTrack(track, { deferAnalysis = false, progress = () => {} } = {}) {
+  progress('Получаем аудио…')
   const blob = await trackBlob(track)
+  progress('Открываем аудио…')
   const buffer = await audio().decodeAudioData(await blob.arrayBuffer())
   if (buffer.duration > MAX_SECONDS) throw new Error('Трек длиннее 12 минут — для телефона многовато')
-  let grid = cachedGrid(track.id)
-  if (!grid) {
-    grid = await analyzeGrid(buffer)
-    storeGrid(track.id, grid)
-    track.bpm = grid.bpm
-    renderLibrary()
-  }
-  return { buffer, grid }
+  const cached = cachedGrid(track.id)
+  const analysis = cached ? Promise.resolve(cached) : analyzeGrid(buffer).then(grid => {
+    storeGrid(track.id, grid); track.bpm = grid.bpm; renderLibrary(); return grid
+  })
+  if (deferAnalysis) return { buffer, grid: cached || { bpm: 0, firstBeat: 0 }, analysis }
+  progress('Определяем ритм…')
+  return { buffer, grid: await analysis }
 }
 
 async function loadForEngine(track) {
@@ -203,7 +222,7 @@ function wavBlob(buffer) {
 }
 
 async function separate(clip, onProgress) {
-  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-background1')
+  stems ||= await import('./stems/flow-mdx-stems.js?v=20261108-stream1')
   const result = await stems.separateTwoStem(wavBlob(clip), (p) => onProgress(p?.percent || 0))
   const decode = async (name) => ctx.decodeAudioData(await result.stems.find((s) => s.name === name).blob.arrayBuffer())
   const [vocals, instrumental] = await Promise.all([decode('Vocals'), decode('Instrumental')])
@@ -232,7 +251,7 @@ function onEvent(e) {
   renderLibrary()
 }
 
-const dj = mountDj({ root: $('djView'), context: audio, load: decodeTrack, tracks: () => state.tracks, beforePlay: () => { stopListening(); if (state.playing) stopSet() }, message: text => status(text) })
+const dj = mountDj({ root: $('djView'), context: audio, load: (track, progress) => decodeTrack(track, { deferAnalysis: true, progress }), tracks: () => state.tracks, beforePlay: () => { stopListening(); if (state.playing) stopSet() }, message: text => status(text) })
 
 // ---------- Set control ----------
 
@@ -600,3 +619,12 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !s
 renderLights()
 showView(location.hash.slice(1))
 loadLibrary()
+
+for (const button of document.querySelectorAll('[data-quick]')) button.onclick = () => {
+  if (state.busy || state.playing) { status('Останови текущий сет, чтобы создать новый'); return }
+  if (state.selected.size < 2) { status('Отметь галочками хотя бы два трека для сета'); return }
+  state.mode = button.dataset.quick
+  location.hash = 'stage'
+  render()
+  void startSet()
+}

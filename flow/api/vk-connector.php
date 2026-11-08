@@ -8,7 +8,7 @@ function vk_connector_configured(): bool
 }
 
 /** Signed backend-to-backend request. Telegram users never see this shared secret. */
-function vk_connector_request(int $uid, string $action, array $params = [], bool $binary = false, bool $ranged = false)
+function vk_connector_request(int $uid, string $action, array $params = [], bool $binary = false, bool $ranged = false, bool $passthrough = false)
 {
     if (!vk_connector_configured()) throw new RuntimeException('Серверное окно VK не настроено');
     $base = rtrim((string) cfg('vk_connector_url'), '/');
@@ -25,21 +25,37 @@ function vk_connector_request(int $uid, string $action, array $params = [], bool
     $nonce = bin2hex(random_bytes(16));
     $signature = hash_hmac('sha256', "$time\n$nonce\n$body", (string) cfg('vk_connector_secret'));
     $ch = curl_init($base . '/rpc');
-    $response = ''; $oversized = false; $upstreamHeaders = [];
+    $response = ''; $oversized = false; $upstreamHeaders = []; $received = 0; $upstreamCode = 0; $forwarded = false;
     $requestHeaders = ['Content-Type: application/json', 'X-Flow-Time: ' . $time, 'X-Flow-Nonce: ' . $nonce, 'X-Flow-Signature: ' . $signature];
     if ($ranged && isset($_SERVER['HTTP_RANGE'])) $requestHeaders[] = 'Range: ' . $_SERVER['HTTP_RANGE'];
     curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_FOLLOWLOCATION => false,
-        CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_TIMEOUT => $action === 'file' ? 280 : 65,
+        CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_TIMEOUT => in_array($action, ['file','stream'], true) ? 280 : 65,
         CURLOPT_HTTPHEADER => $requestHeaders,
-        CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$upstreamHeaders) {
+        CURLOPT_HEADERFUNCTION => function ($ch, $line) use (&$upstreamHeaders, &$upstreamCode, &$forwarded, $passthrough) {
+            if (preg_match('#^HTTP/\S+ (\d+)#', $line, $status)) { $upstreamCode = (int) $status[1]; $upstreamHeaders = []; }
+            if ($passthrough && trim($line) === '' && in_array($upstreamCode, [200,206,416], true)) {
+                @ini_set('zlib.output_compression', '0');
+                while (ob_get_level() > 0) { if (!@ob_end_clean()) break; }
+                http_response_code($upstreamCode);
+                foreach ($upstreamHeaders as $name => $value) header($name . ': ' . $value);
+                header('Cache-Control: no-store'); header('X-Accel-Buffering: no'); header('X-Content-Type-Options: nosniff');
+                $forwarded = true;
+            }
             if (preg_match('/^(Content-Type|Content-Length|Content-Range|Accept-Ranges):\s*(.*)$/i', trim($line), $m)) $upstreamHeaders[strtolower($m[1])] = $m[2];
             return strlen($line);
         },
-        CURLOPT_WRITEFUNCTION => function ($ch, $chunk) use (&$response, &$oversized, $binary) {
+        CURLOPT_WRITEFUNCTION => function ($ch, $chunk) use (&$response, &$oversized, &$received, &$forwarded, $binary) {
+            $received += strlen($chunk);
+            if ($forwarded) {
+                if ($received > 40 * 1024 * 1024 || connection_aborted()) return 0;
+                if ($_SERVER['REQUEST_METHOD'] !== 'HEAD') { echo $chunk; flush(); }
+                return strlen($chunk);
+            }
             if (strlen($response) + strlen($chunk) > ($binary ? TG_FILE_LIMIT : 2 * 1024 * 1024)) { $oversized = true; return 0; }
             $response .= $chunk; return strlen($chunk);
         }]);
     $ok = curl_exec($ch); $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE); unset($ch);
+    if ($forwarded) return null; // Never append JSON to an interrupted audio response.
     if ($oversized) throw new RuntimeException('Ответ сервера VK слишком большой');
     if ($ok === false) throw new RuntimeException('Не удалось дождаться ответа сервера FLOW. Он может запускаться после простоя. Повтори проверку подключения перед новым вводом номера.');
     if ($ranged && in_array($code, [200,206,416], true)) return ['body'=>$response,'status'=>$code,'headers'=>$upstreamHeaders];
@@ -58,11 +74,13 @@ function vk_connector_stream(int $uid, array $track): void
 {
     try {
         @set_time_limit(300);
-        $bytes = vk_connector_request($uid, 'file', ['identity' => $track['identity'], 'vk_user' => $track['vk_user']], true, true);
-        http_response_code($bytes['status']);
-        foreach ($bytes['headers'] as $name=>$value) header($name . ': ' . $value);
-        header('Cache-Control: no-store'); header('X-Content-Type-Options: nosniff');
-        if ($_SERVER['REQUEST_METHOD'] !== 'HEAD') echo $bytes['body'];
+        $native = ($_GET['stream'] ?? '') === '1';
+        $params = ['identity' => $track['identity'], 'vk_user' => $track['vk_user'], 'track_id' => $track['id']];
+        if ($native && isset($_GET['resource'])) {
+            if (!preg_match('/^[a-f0-9]{40}$/D', (string) $_GET['resource'])) throw new RuntimeException('Некорректный адрес потока');
+            $params['resource'] = $_GET['resource'];
+        }
+        vk_connector_request($uid, $native ? 'stream' : 'file', $params, true, true, true);
     } catch (RuntimeException $e) { json_out(422, ['error' => $e->getMessage()]); }
 }
 

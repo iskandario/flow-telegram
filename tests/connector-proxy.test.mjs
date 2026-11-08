@@ -40,7 +40,9 @@ test('PHP and Worker proxy signed browser sessions, audio and logout using Teleg
     logout: async (uid) => { connected.delete(uid); return { ok: true } },
     call: async (_uid, method) => method === 'audio.getById' ? [raw] : { items: [raw], count: 1 }
   }
-  const service = connector({ secret, sessions, download: async () => Buffer.alloc(1024, 7) })
+  let finishStream
+  const streamGate = new Promise(resolve => { finishStream = resolve })
+  const service = connector({ secret, sessions, stream: async (_req, res) => { res.writeHead(200, { 'Content-Type':'audio/mpeg', 'Content-Length':'32768' }); res.write(Buffer.alloc(16384, 1)); await streamGate; res.end(Buffer.alloc(16384, 2)) }, download: async () => Buffer.alloc(1024, 7) })
   await new Promise((r) => service.listen(0, '127.0.0.1', r))
   const connectorUrl = `http://127.0.0.1:${service.address().port}`
   let php, directory
@@ -54,7 +56,7 @@ test('PHP and Worker proxy signed browser sessions, audio and logout using Teleg
     php = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', directory], { stdio: 'ignore' })
     const base = `http://127.0.0.1:${port}`
     for (let i = 0; i < 40; i++) { try { await fetch(base); break } catch { await new Promise((r) => setTimeout(r, 50)) } }
-    const phpCall = (action, { uid = 42, method = 'GET', body, id, headers = {} } = {}) => fetch(`${base}/api/app.php?a=${action}${id ? '&id=' + encodeURIComponent(id) : ''}`, { method, headers: { 'X-Telegram-Init-Data': uid ? auth(uid) : '', ...headers }, body: body && JSON.stringify(body) })
+    const phpCall = (action, { uid = 42, method = 'GET', body, id, native = false, headers = {} } = {}) => fetch(`${base}/api/app.php?a=${action}${id ? '&id=' + encodeURIComponent(id) : ''}${native ? '&stream=1' : ''}`, { signal: AbortSignal.timeout(5000), method, headers: { 'X-Telegram-Init-Data': uid ? auth(uid) : '', ...headers }, body: body && JSON.stringify(body) })
     async function exercise(call) {
       const statusResponse = await call('vk-status'); const statusText = await statusResponse.text();
       assert.ok(statusText.startsWith('{'), statusText); const state = JSON.parse(statusText); assert.equal(state.provider, 'browser'); assert.equal(state.connected, true)
@@ -74,6 +76,18 @@ test('PHP and Worker proxy signed browser sessions, audio and logout using Teleg
       assert.equal(imported.track.id, 'vk:7_3'); assert.equal(imported.track.identity, undefined)
       assert.equal((await call('file', { uid: 43, id: 'vk:7_3' })).status, 404)
       const audio = await call('file', { id: 'vk:7_3' }); assert.equal(audio.status, 200); assert.equal((await audio.arrayBuffer()).byteLength, 1024)
+      if (call === phpCall) {
+        try {
+          const response = await call('file', { id: 'vk:7_3', native: true })
+          assert.equal(response.headers.get('x-accel-buffering'), 'no')
+          const reader = response.body.getReader(), first = await reader.read()
+          assert.equal(first.value[0], 1, 'PHP delivers audio before Render finishes')
+          finishStream()
+          let total = first.value.length
+          for (;;) { const part = await reader.read(); if (part.done) break; total += part.value.length }
+          assert.equal(total, 32768)
+        } finally { finishStream() }
+      }
       assert.equal((await call('media-session')).status, 405)
       const mediaSession = await call('media-session', { method: 'POST' })
       assert.equal(mediaSession.status, 200)
@@ -95,6 +109,7 @@ test('PHP and Worker proxy signed browser sessions, audio and logout using Teleg
     const workerCall = (action, { uid = 42, method = 'GET', body, id, headers = {} } = {}) => worker.fetch(new Request(`https://flow.test/api/app.php?a=${action}${id ? '&id=' + encodeURIComponent(id) : ''}`, { method, headers: { 'X-Telegram-Init-Data': uid ? auth(uid) : '', ...headers }, body: body && JSON.stringify(body) }), env, {})
     await exercise(workerCall)
   } finally {
+    finishStream()
     globalThis.fetch = originalFetch
     if (php) { php.kill(); await new Promise((r) => php.once('exit', r)) }
     await new Promise((r) => service.close(r)); if (directory) await rm(directory, { recursive: true, force: true })

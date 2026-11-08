@@ -55,6 +55,27 @@ export async function hlsBytes(url, manifest, fetch, depth = 0) {
     return hlsBytes(next, (await fetch(next, 1024 * 1024)).toString(), fetch, depth + 1)
   }
   if (!lines.includes('#EXT-X-ENDLIST')) throw new Error('Прямые эфиры не поддерживаются')
+  // Keep only four segment requests ahead; decrypt and append in manifest order.
+  // Byte-range playlists retain the sequential resource cache below.
+  const segments = lines.filter(line => line && !line.startsWith('#'))
+  if (segments.length > 600) throw new Error('Слишком длинный HLS-трек')
+  const pending = new Map()
+  const parallel = !lines.some(line => line.startsWith('#EXT-X-BYTERANGE:'))
+  let consumed = 0
+  const fill = () => {
+    if (!parallel) return
+    for (let i = consumed; i < Math.min(segments.length, consumed + 4); i++) {
+      if (!pending.has(i)) pending.set(i, Promise.resolve().then(() => fetch(mediaUrl(segments[i], url), 8 * 1024 * 1024)).then(bytes => ({ bytes }), error => ({ error })))
+    }
+  }
+  const segment = async (line, range) => {
+    if (!parallel) return getPart(line, range)
+    fill()
+    const result = await pending.get(consumed)
+    pending.delete(consumed++)
+    if (result.error) throw result.error
+    return result.bytes
+  }
   const parts = []; let total = 0, count = 0, sequence = 0n, key = null, iv = null, range = null, previousRange = null, rangeResource = null
   const append = (bytes) => { total += bytes.length; if (total > 40 * 1024 * 1024) throw new Error('Трек слишком большой'); parts.push(bytes) }
   const getPart = async (uri, rangeText) => {
@@ -96,7 +117,7 @@ export async function hlsBytes(url, manifest, fetch, depth = 0) {
     } else if (line.startsWith('#EXT-X-BYTERANGE:')) range = line.slice(17)
     else if (line && !line.startsWith('#')) {
       if (++count > 600) throw new Error('Слишком длинный HLS-трек')
-      append(decrypt(await getPart(line, range))); range = null; sequence++
+      append(decrypt(await segment(line, range))); range = null; sequence++
     }
   }
   if (!count) throw new Error('Пустой HLS-плейлист')
