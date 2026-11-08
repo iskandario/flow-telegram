@@ -357,9 +357,10 @@ export class Sessions {
       try {
         const response = await Promise.race([window.vkApi.api(method, { ...params, v: '5.204' }), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 25000))])
         return { ok: true, response }
-      } catch (e) { return { ok: false, code: Number(e?.error_code || e?.error?.error_code) || 0 } }
+      } catch (e) { return { ok: false, reason: e?.message === 'timeout' ? 'timeout' : 'api', code: Number(e?.error_code || e?.error?.error_code) || 0 } }
     }, { method, params })
     if (!result.ok) {
+      console.warn(JSON.stringify({event:'vk_api_error',method,code:result.code,reason:result.reason}))
       if ([5, 14, 17].includes(result.code)) { session.needsLogin = true; session.connected = false; session.musicVerified = false; session.catalogCache?.clear(); session.audioUrls?.clear(); throw new Error('VK просит подтвердить вход. Открой окно подключения.') }
       if ([6, 9, 29].includes(result.code)) throw new Error('VK временно ограничил запросы. Попробуй позже.')
       throw new Error('VK не ответил на запрос. Проверь окно подключения и повтори.')

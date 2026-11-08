@@ -24,7 +24,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
   }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream10' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream11' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
     const started = Date.now(); let actionName = 'request', mediaKey = null
     try {
@@ -114,7 +114,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
     } catch (error) {
       if (mediaKey) resolvedMedia.delete(mediaKey)
       const errorCode = /^[A-Za-z_0-9]{1,64}$/.test(error.code || '') ? error.code : error.name || 'Error'
-      console.warn(JSON.stringify({event:'rpc_failure',action:actionName,kind:errorCode,cause:error.cause?.code,location:String(error.stack || '').split('\n').filter(line => /(?:sessions|remote-state|stream|media)\.mjs:\d+/.test(line)).map(line => line.match(/(?:sessions|remote-state|stream|media)\.mjs:\d+:\d+/)?.[0]).filter(Boolean).slice(0,3),elapsedMs:Date.now()-started}))
+      console.warn(JSON.stringify({event:'rpc_failure',action:actionName,kind:errorCode,origin:error.code === 'VK_MEDIA_ORIGIN' ? error.origin : undefined,cause:error.cause?.code,location:String(error.stack || '').split('\n').filter(line => /(?:sessions|remote-state|stream|media)\.mjs:\d+/.test(line)).map(line => line.match(/(?:sessions|remote-state|stream|media)\.mjs:\d+:\d+/)?.[0]).filter(Boolean).slice(0,3),elapsedMs:Date.now()-started}))
       // Never log request bodies: login text, cookies and media URLs are private.
       if (res.headersSent || res.destroyed) { res.destroy(); return }
       const message = error instanceof SyntaxError ? 'Некорректный запрос' : error.message
