@@ -18,9 +18,10 @@ export function skipMusicAsset(request) {
   if (!['image', 'media', 'font'].includes(request.resourceType())) return false
   try {
     const frame = request.frame()
-    if (frame.parentFrame() || !/^https:\/\/(?:www\.)?vk\.(?:com|ru)\/audio(?:[/?#]|$)/.test(frame.url())) return false
+    if (frame.parentFrame() || !/^https:\/\/(?:www\.)?vk\.(?:com|ru)\/audio(?:s|-?\d|[/?#]|$)/.test(frame.url())) return false
+    if (['media', 'font'].includes(request.resourceType())) return true
     const u = new URL(request.url())
-    return /(^|\.)(userapi\.com|vkuseraudio\.(net|com)|vkuserphoto\.ru)$/.test(u.hostname)
+    return /(^|\.)(userapi\.com|vkuseraudio\.(net|com)|vkuserphoto\.ru|vkuserphoto\.com|vkcdn\.ru|vk-cdn\.net|vkuservideo\.net)$/.test(u.hostname)
   } catch { return false }
 }
 export class Sessions {
@@ -110,7 +111,7 @@ export class Sessions {
           if (!allowNavigation(request)) return await route.abort()
           // Only decorative CDN assets on the music page. Verification images,
           // frames, scripts and all login pages retain their normal behavior.
-          if (skipMusicAsset(request)) return await route.abort()
+          if (skipMusicAsset(request)) { if (session) session.skippedAssets = (session.skippedAssets || 0) + 1; return await route.abort() }
           return await route.fallback()
         } catch {
           // Closing a page can cancel an in-flight route. Never crash other sessions.
@@ -169,7 +170,7 @@ export class Sessions {
   }
   async profile(uid, session) {
     if (!trustedPage(session.page.url())) return { configured: true, provider: 'browser', connected: false, profile: null }
-    const result = await session.page.evaluate(() => ({ id: Number(window.vk?.id) || 0, api: typeof window.vkApi?.api === 'function', name: document.querySelector('.top_profile_name, [data-testid="topnav-profile-name"], [class*="TopNavBtn__profileName"]')?.textContent?.trim() || 'VK' })).catch(() => ({ id: 0 }))
+    const result = await session.page.evaluate(() => ({ id: Number(window.vk?.id) || 0, api: typeof window.vkApi?.api === 'function', userAgent: navigator.userAgent, name: document.querySelector('.top_profile_name, [data-testid="topnav-profile-name"], [class*="TopNavBtn__profileName"]')?.textContent?.trim() || 'VK' })).catch(() => ({ id: 0 }))
     const authenticated = result.id > 0 && result.api && !session.needsLogin
     if (authenticated && !session.musicVerified) {
       const verified = await session.page.evaluate(async () => {
@@ -187,6 +188,7 @@ export class Sessions {
     }
     const connected = authenticated && !!session.musicVerified
     session.connected = connected
+    if (connected) { session.profileId = result.id; session.userAgent = result.userAgent }
     if (connected) this.warmCatalog(uid, session)
     if (connected && Date.now() - session.lastSave > 300000 && !session.saving) {
       session.lastSave = Date.now()
@@ -306,6 +308,15 @@ export class Sessions {
       if (error.name === 'TimeoutError') throw new Error('Не удалось обновить изображение VK за 5 секунд. Текущая страница не сброшена; FLOW повторит загрузку.')
       throw error
     }
+  }
+  cachedAudio(uid, identity, vkUser) {
+    const session = this.sessions.get(uid)
+    if (!session?.connected || session.needsLogin || Number(vkUser) !== session.profileId) return null
+    const cached = session.audioUrls?.get(`${Number(identity?.ownerId)}_${Number(identity?.id)}`)
+    if (!cached || cached.profileId !== session.profileId || Date.now()-cached.at >= 600000) return null
+    if (identity?.accessKey && identity.accessKey !== cached.raw.access_key) return null
+    session.used = Date.now()
+    return {raw:cached.raw,userAgent:session.userAgent}
   }
   async userAgent(uid) {
     const session = await this.ensure(uid)

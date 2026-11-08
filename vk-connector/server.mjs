@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -23,7 +24,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
   }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream9' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream10' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
     const started = Date.now(); let actionName = 'request', mediaKey = null
     try {
@@ -43,7 +44,17 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
       const user = String(uid)
       const resolvedKey = user + ':' + JSON.stringify([params.vk_user, params.identity]); mediaKey = resolvedKey
       for (const [key, value] of resolvedMedia) if (Date.now() - value.at > 600000) resolvedMedia.delete(key)
-      const warm = ['stream','file'].includes(action) && !params.resource && resolvedMedia.get(resolvedKey)
+      let warm = ['stream','file'].includes(action) && !params.resource && resolvedMedia.get(resolvedKey)
+      if (!warm && ['stream','file'].includes(action) && !params.resource) {
+        const cached = sessions.cachedAudio?.(user, params.identity, params.vk_user)
+        if (cached) {
+          const resolved = await resolve(async () => [cached.raw], params.identity)
+          if (resolved.track.duration > 720) throw new Error('Для сета выбери трек короче 12 минут')
+          warm = {at:Date.now(),resolved,userAgent:cached.userAgent}
+          while (resolvedMedia.size >= 32) resolvedMedia.delete(resolvedMedia.keys().next().value)
+          resolvedMedia.set(resolvedKey,warm)
+        }
+      }
       const result = action === 'stream' && params.resource ? { entry: resources.get(user, params.track_id, params.resource) } : warm ? { resolved: warm.resolved, userAgent: warm.userAgent } : await sessions.serial(user, async () => {
         if (action === 'stream' && params.resource) return { entry: resources.get(user, params.track_id, params.resource) }
         if (action === 'status') return sessions.status(user)
@@ -116,7 +127,11 @@ if (process.argv[1] && resolvePath(process.argv[1]) === fileURLToPath(import.met
   const sessions = new Sessions({ secret, store: process.env.FLOW_STATE_URL ? new RemoteState(process.env.FLOW_STATE_URL, secret) : null, directory: process.env.FLOW_SESSION_DIR || './state', max: Number(process.env.FLOW_MAX_BROWSERS) || 2 })
   const server = connector({ secret, sessions })
   const timer = setInterval(() => void sessions.idle(), 60000); timer.unref()
+  const memoryTimer = setInterval(async () => {
+    const bytes = await readFile('/sys/fs/cgroup/memory.current','utf8').catch(() => '')
+    if (bytes) console.info(JSON.stringify({event:'runtime_memory',mb:Math.round(Number(bytes)/1048576),browsers:sessions.sessions.size,blockedAssets:[...sessions.sessions.values()].reduce((n,s)=>n+(s.skippedAssets||0),0)}))
+  },30000); memoryTimer.unref()
   server.requestTimeout = 300000; server.headersTimeout = 10000
   server.listen(Number(process.env.PORT) || 8788, process.env.HOST || '127.0.0.1', () => console.log('FLOW VK connector ready'))
-  for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { clearInterval(timer); server.close(); void sessions.close().finally(() => process.exit(0)) })
+  for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { clearInterval(timer); clearInterval(memoryTimer); server.close(); void sessions.close().finally(() => process.exit(0)) })
 }

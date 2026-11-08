@@ -4,6 +4,8 @@ import {Sessions,skipMusicAsset} from '../vk-connector/sessions.mjs'
 test('music decorations are skipped while verification assets and API requests remain available',()=>{
  const request=(type,url,page='https://vk.com/audio',child=false)=>({resourceType:()=>type,url:()=>url,frame:()=>({url:()=>page,parentFrame:()=>child?{}:null})})
  assert.equal(skipMusicAsset(request('image','https://sun.userapi.com/cover.jpg')),true)
+ assert.equal(skipMusicAsset(request('image','https://sun.userapi.com/cover.jpg','https://vk.com/audios123')),true)
+ assert.equal(skipMusicAsset(request('image','https://sun.userapi.com/cover.jpg','https://vk.com/audio-123')),true)
  assert.equal(skipMusicAsset(request('image','https://sun.userapi.com/captcha.jpg','https://vk.com/challenge')),false)
  assert.equal(skipMusicAsset(request('image','https://sun.userapi.com/captcha.jpg',undefined,true)),false)
  assert.equal(skipMusicAsset(request('script','https://vk.com/code.js')),false)

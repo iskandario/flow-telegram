@@ -49,3 +49,13 @@ test('a slow or failed session backup cannot delay playback authorization',async
  rejectSave(new TypeError('fetch failed'));await session.saving
  assert.equal((await sessions.profile('7',session)).connected,true)
 })
+test('prepared audio stays available without entering the browser queue, scoped to the signed-in account',()=>{
+ const sessions=new Sessions({secret:'test',directory:'/unused'})
+ const session={connected:true,profileId:7,userAgent:'fixture'};sessions.sessions.set('7',session)
+ sessions.rememberAudio(session,7,{items:[{id:3,owner_id:7,url:'https://a.userapi.com/a.mp3',access_key:'key'}]})
+ assert.ok(sessions.cachedAudio('7',{id:3,ownerId:7,accessKey:'key'},7))
+ assert.equal(sessions.cachedAudio('7',{id:3,ownerId:7},8),null)
+ assert.equal(sessions.cachedAudio('8',{id:3,ownerId:7},7),null)
+ assert.equal(sessions.cachedAudio('7',{id:3,ownerId:7,accessKey:'wrong'},7),null)
+ session.needsLogin=true;assert.equal(sessions.cachedAudio('7',{id:3,ownerId:7},7),null)
+})
