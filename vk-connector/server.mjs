@@ -23,7 +23,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
   }
   return createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff')
-    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream7' })
+    if (req.url === '/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'flow-vk-connector', release: '20261108-stream8' })
     if (req.url !== '/rpc' || req.method !== 'POST') return json(res, 404, { error: 'Not found' })
     const started = Date.now(); let actionName = 'request', mediaKey = null
     try {
@@ -75,6 +75,7 @@ export function connector({ secret, sessions, download = downloadAudio, stream =
         }
         return { track: resolved.track, profile: state.profile }
       })
+      if (['file','stream'].includes(action) && !params.resource) console.info(JSON.stringify({event:'audio_resolved',action,elapsedMs:Date.now()-started}))
       if (action === 'stream' || (action === 'file' && download === downloadAudio && /\.mp3(?:[?#]|$)/i.test(result.resolved?.url))) {
         const entry = result.entry || { url: result.resolved.url, userAgent: result.userAgent }
         try {

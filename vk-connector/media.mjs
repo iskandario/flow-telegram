@@ -22,7 +22,9 @@ export async function fetchMedia(value, limit, signal, redirects = 0, userAgent)
   const addresses = await lookup(url.hostname, { all: true, family: 4 })
   if (!addresses.length || addresses.some((a) => !publicIPv4(a.address))) throw new Error('Недопустимый адрес аудиосервера')
   return new Promise((resolve, reject) => {
+    let timer
     const req = https.get(url, { signal, lookup: (_host, options, cb) => options.all ? cb(null, [addresses[0]]) : cb(null, addresses[0].address, 4), headers: { Referer: 'https://vk.com/', ...(userAgent && typeof userAgent === 'string' && !/[\r\n]/.test(userAgent) ? { 'User-Agent': userAgent.slice(0, 512) } : {}) } }, (res) => {
+      clearTimeout(timer)
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects < 3) {
         res.resume()
         fetchMedia(mediaUrl(res.headers.location, url), limit, signal, redirects + 1, userAgent).then(resolve, reject); return
@@ -33,8 +35,11 @@ export async function fetchMedia(value, limit, signal, redirects = 0, userAgent)
       res.on('data', (chunk) => { size += chunk.length; if (size > limit) { res.destroy(new Error('Аудио превышает допустимый размер')); return }; parts.push(chunk) })
       res.on('error', reject); res.on('end', () => resolve(Buffer.concat(parts)))
     })
-    req.setTimeout(30000, () => req.destroy(new Error('Аудиосервер VK не ответил')))
-    req.on('error', reject)
+    timer = setTimeout(() => req.destroy(Object.assign(Error('Аудиосервер VK не ответил'), {code:'ETIMEDOUT'})), 12000)
+    timer.unref?.()
+    req.setTimeout(15000, () => req.destroy(Object.assign(Error('Аудиосервер VK не ответил'), {code:'ETIMEDOUT'})))
+    req.on('error', error => { clearTimeout(timer); reject(error) })
+    req.on('close', () => clearTimeout(timer))
   })
 }
 export function attributes(line) {
@@ -125,7 +130,14 @@ export async function hlsBytes(url, manifest, fetch, depth = 0) {
 }
 export async function downloadAudio(value, { ffmpeg = 'ffmpeg', fetch = fetchMedia, userAgent } = {}) {
   const url = mediaUrl(value), signal = AbortSignal.timeout(180000)
-  const get = (u, limit) => fetch(u, limit, signal, 0, userAgent)
+  const get = async (u, limit) => {
+    for (let attempt = 0; ; attempt++) {
+      try { return await fetch(u, limit, signal, 0, userAgent) }
+      catch (error) {
+        if (attempt >= 2 || signal.aborted || !['ECONNRESET','EPIPE','ETIMEDOUT','EAI_AGAIN','ECONNREFUSED'].includes(error.code)) throw error
+      }
+    }
+  }
   const hls = /\.m3u8(?:[?#]|$)/i.test(url.href)
   const data = await get(url, hls ? 1024 * 1024 : MAX)
   if (!hls && !data.subarray(0, 32).toString().trimStart().startsWith('#EXTM3U')) {

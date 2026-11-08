@@ -29,10 +29,12 @@ export async function openMedia(value, { signal, range, userAgent } = {}, redire
   const addresses = await lookup(url.hostname, { all: true, family: 4 })
   if (!addresses.length || addresses.some(a => !publicIPv4(a.address))) throw Error('Недопустимый адрес аудиосервера')
   return new Promise((resolve, reject) => {
+    let timer
     const req = https.get(url, { signal, lookup: (_host, options, cb) => options.all ? cb(null, [addresses[0]]) : cb(null, addresses[0].address, 4), headers: {
       Referer: 'https://vk.com/', ...(range ? { Range: range } : {}),
       ...(userAgent && !/[\r\n]/.test(userAgent) ? { 'User-Agent': userAgent.slice(0, 512) } : {})
     } }, res => {
+      clearTimeout(timer)
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
         if (redirects >= 3) return reject(Error('Слишком много перенаправлений аудио'))
@@ -41,8 +43,12 @@ export async function openMedia(value, { signal, range, userAgent } = {}, redire
       if (![200, 206, 416].includes(res.statusCode)) { res.resume(); reject(Object.assign(Error('VK не отдал аудио. Запусти трек снова.'), {code: [403,404,410].includes(res.statusCode) ? 'VK_MEDIA_EXPIRED' : 'VK_MEDIA_UNAVAILABLE'})); return }
       resolve(res)
     })
-    req.setTimeout(30000, () => req.destroy(Error('Аудиосервер VK не ответил')))
-    req.on('error', reject)
+    // Socket inactivity alone does not bound TCP/TLS establishment.
+    timer = setTimeout(() => req.destroy(Object.assign(Error('Аудиосервер VK не ответил'), {code:'ETIMEDOUT'})), 12000)
+    timer.unref?.()
+    req.setTimeout(15000, () => req.destroy(Object.assign(Error('Аудиосервер VK не ответил'), {code:'ETIMEDOUT'})))
+    req.on('error', error => { clearTimeout(timer); reject(error) })
+    req.on('close', () => clearTimeout(timer))
   })
 }
 export function rewritePlaylist(text, base, register) {
