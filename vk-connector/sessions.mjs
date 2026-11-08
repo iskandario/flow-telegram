@@ -51,7 +51,7 @@ export class Sessions {
     const origins = new Map((session.storageOrigins || []).map(o => [o.origin, o]))
     for (const page of session.context.pages()) {
       if (page.isClosed() || !trustedPage(page.url())) continue
-      const origin = await page.evaluate(() => ({ origin: location.origin, localStorage: Object.keys(localStorage).map(name => ({name, value: localStorage.getItem(name)})) })).catch(() => null)
+      const origin = await page.evaluate(() => ({ origin: location.origin, localStorage: Object.keys(localStorage).map(name => ({name, value: localStorage.getItem(name)})).filter(entry => typeof entry.value === 'string') })).catch(() => null)
       if (origin) origins.set(origin.origin, origin)
     }
     session.storageOrigins = [...origins.values()]
@@ -89,7 +89,20 @@ export class Sessions {
       }).catch((e) => { this.browserPromise = null; throw e })
       const browser = await this.browserPromise
       const restoredState = await this.saved(uid)
-      context = await browser.newContext({ viewport: { width: WIDTH, height: HEIGHT }, storageState: restoredState, acceptDownloads: false, locale: 'ru-RU', serviceWorkers: 'block' })
+      context = await browser.newContext({ viewport: { width: WIDTH, height: HEIGHT }, acceptDownloads: false, locale: 'ru-RU', serviceWorkers: 'block' })
+      if (restoredState) {
+        await context.addCookies(restoredState.cookies || [])
+        // Restore at document creation, not by opening extra renderer pages.
+        // VK decorates localStorage with non-storage properties: ignore nulls.
+        await context.addInitScript(({origins}) => {
+          const saved = origins.find(o => o.origin === location.origin)
+          for (const entry of saved?.localStorage || []) {
+            if (typeof entry.name === 'string' && typeof entry.value === 'string') {
+              try { if (localStorage.getItem(entry.name) === null) localStorage.setItem(entry.name, entry.value) } catch {}
+            }
+          }
+        }, {origins: restoredState.origins || []})
+      }
       // Login stays on VK's own origins; neither arbitrary navigation nor downloads are exposed.
       await context.route('**/*', async (route) => {
         try {

@@ -53,6 +53,23 @@ try {
   await sessions.idle()
   assert.equal(sessions.sessions.has('42'), false)
   assert.equal((await sessions.phoneLogin('42')).connected, true, 'Reopening login restores encrypted session on music page instead of restarting VK ID')
+  // Real VK adds enumerable properties whose getItem() is null. Older snapshots
+  // containing such entries must still restore valid cookies and storage.
+  const restored = sessions.sessions.get('42')
+  await restored.saving
+  await restored.page.evaluate(() => Object.defineProperty(localStorage, 'notAStorageKey', {value:'decorator',enumerable:true,configurable:true}))
+  await sessions.save('42', restored)
+  assert.ok((await sessions.saved('42')).origins.every(o => o.localStorage.every(v => typeof v.value === 'string')))
+  const originalSaved = sessions.saved.bind(sessions)
+  sessions.saved = async uid => {
+    const value = await originalSaved(uid)
+    if (value?.origins?.[0]) value.origins[0].localStorage.push({name:'legacyNull',value:null})
+    return value
+  }
+  restored.used = Date.now() - 16 * 60000
+  await sessions.idle()
+  assert.equal((await sessions.status('42')).connected, true, 'A legacy null value cannot break authenticated restore')
+  sessions.saved = originalSaved
   await sessions.logout('42')
   assert.equal((await sessions.status('42')).connected, false)
   const app = await sessions.appLogin('43')
