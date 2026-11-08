@@ -53,7 +53,7 @@ async function getAudio(token, identity) {
 }
 export function mediaUrl(value) {
   const url = new URL(value)
-  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || !/(^|\.)(userapi\.com|vkuseraudio\.(net|com)|vk-cdn\.net|vkcdn\.ru|vk\.com|vk\.ru|mycdn\.me|okcdn\.ru)$/.test(url.hostname)) throw new Error('VK вернул неподдерживаемый адрес аудио')
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || !/(^|\.)(userapi\.com|vkuseraudio\.(net|com|ru)|vk-cdn\.net|vkcdn\.ru|vk\.com|vk\.ru|mycdn\.me|okcdn\.ru)$/.test(url.hostname)) throw new Error('VK вернул неподдерживаемый адрес аудио')
   return url
 }
 export async function vkFile(env, uid, track) {

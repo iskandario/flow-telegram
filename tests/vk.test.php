@@ -40,6 +40,8 @@ $bytes = base64_decode($sealed); $bytes[30] = chr(ord($bytes[30]) ^ 1);
 rejects(fn () => vk_unseal(base64_encode($bytes)), 'заново');
 foreach (['http://a.userapi.com/a', 'https://userapi.com.evil.test/a', 'https://user:pass@a.userapi.com/a', 'https://127.0.0.1/a', 'https://a.userapi.com:444/a', 'file:///etc/passwd'] as $url) rejects(fn () => vk_media_url($url), 'неподдерживаемый');
 check(vk_media_url('https://cs1.userapi.com/a.mp3') === 'cs1.userapi.com', 'Trusted CDN');
+check(vk_media_url('https://cs1-81v4.vkuseraudio.ru/index.m3u8') === 'cs1-81v4.vkuseraudio.ru', 'Russian audio CDN');
+rejects(fn () => vk_media_url('https://vkuseraudio.ru.evil.test/a'), 'неподдерживаемый');
 check(vk_relative_url('https://a.userapi.com/path/master.m3u8', 'part.ts') === 'https://a.userapi.com/path/part.ts', 'Relative HLS segment');
 rejects(fn () => vk_hls_bytes('https://a.userapi.com/a', "#EXTM3U\nsegment.ts"), 'эфиры');
 rejects(fn () => vk_hls_bytes('https://a.userapi.com/a', "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"key\"\n#EXT-X-ENDLIST"), 'Защищённый');

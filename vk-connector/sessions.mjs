@@ -21,7 +21,7 @@ export function skipMusicAsset(request) {
     if (frame.parentFrame() || !/^https:\/\/(?:www\.)?vk\.(?:com|ru)\/audio(?:s|-?\d|[/?#]|$)/.test(frame.url())) return false
     if (['media', 'font'].includes(request.resourceType())) return true
     const u = new URL(request.url())
-    return /(^|\.)(userapi\.com|vkuseraudio\.(net|com)|vkuserphoto\.ru|vkuserphoto\.com|vkcdn\.ru|vk-cdn\.net|vkuservideo\.net)$/.test(u.hostname)
+    return /(^|\.)(userapi\.com|vkuseraudio\.(net|com|ru)|vkuserphoto\.ru|vkuserphoto\.com|vkcdn\.ru|vk-cdn\.net|vkuservideo\.net)$/.test(u.hostname)
   } catch { return false }
 }
 export class Sessions {

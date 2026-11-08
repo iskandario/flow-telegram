@@ -7,7 +7,7 @@ function vk_media_url(string $url): string
     $p = parse_url($url);
     $host = strtolower($p['host'] ?? '');
     if (($p['scheme'] ?? '') !== 'https' || isset($p['user']) || isset($p['pass']) || (isset($p['port']) && $p['port'] !== 443)
-        || !preg_match('/(^|\.)(userapi\.com|vkuseraudio\.(net|com)|vk-cdn\.net|vkcdn\.ru|vk\.com|vk\.ru|mycdn\.me|okcdn\.ru)$/D', $host)) {
+        || !preg_match('/(^|\.)(userapi\.com|vkuseraudio\.(net|com|ru)|vk-cdn\.net|vkcdn\.ru|vk\.com|vk\.ru|mycdn\.me|okcdn\.ru)$/D', $host)) {
         throw new RuntimeException('VK вернул неподдерживаемый адрес аудио');
     }
     return $host;

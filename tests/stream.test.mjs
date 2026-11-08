@@ -42,3 +42,12 @@ test('audio forwards the first bytes before the upstream file finishes', async (
     assert.equal(opens, 2, 'A reset before headers is retried without restarting playback')
   } finally { release(); await new Promise(resolve => server.close(resolve)) }
 })
+
+test('VK Russian audio CDN supports playlists, segments and keys while lookalike domains remain blocked', () => {
+  const registered=[]
+  const manifest=rewritePlaylist('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="key"\n#EXTINF:5,\nsegment.ts\n#EXT-X-ENDLIST','https://cs1-81v4.vkuseraudio.ru/s/v1/ac/fixture/index.m3u8',url=>{registered.push(url.href);return '?resource='+registered.length})
+  assert.equal(registered.length,2)
+  assert.ok(registered.every(url=>url.startsWith('https://cs1-81v4.vkuseraudio.ru/')))
+  assert.ok(!manifest.includes('vkuseraudio'))
+  assert.throws(()=>rewritePlaylist('#EXTM3U\nhttps://vkuseraudio.ru.evil.test/segment','https://cs1-81v4.vkuseraudio.ru/index.m3u8',()=>''),/неподдерживаемый/)
+})

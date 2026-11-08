@@ -10,7 +10,7 @@ const run = promisify(execFile)
 const MAX = 20 * 1024 * 1024
 export function mediaUrl(value, base) {
   const url = new URL(value, base)
-  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || !/(^|\.)(userapi\.com|vkuseraudio\.(net|com)|vk-cdn\.net|vkcdn\.ru|vk\.com|vk\.ru|mycdn\.me|okcdn\.ru)$/.test(url.hostname)) throw Object.assign(new Error('VK вернул неподдерживаемый адрес аудио'), {code:'VK_MEDIA_ORIGIN',origin: url.origin})
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443') || !/(^|\.)(userapi\.com|vkuseraudio\.(net|com|ru)|vk-cdn\.net|vkcdn\.ru|vk\.com|vk\.ru|mycdn\.me|okcdn\.ru)$/.test(url.hostname)) throw Object.assign(new Error('VK вернул неподдерживаемый адрес аудио'), {code:'VK_MEDIA_ORIGIN',origin: url.origin})
   return url
 }
 export function publicIPv4(ip) {
